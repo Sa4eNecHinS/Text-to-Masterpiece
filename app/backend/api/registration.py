@@ -1,0 +1,139 @@
+import logging
+from operator import add
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.status import HTTP_401_UNAUTHORIZED
+
+from backend.api.fast_api import cool_domain, UserId
+from backend.database.db_queries import get_user, add_user
+from backend.database.dependencies import get_db
+from backend.pydantic_classes.models import UserRegistration
+from backend.database.hash import hash_password, verify_password
+
+
+logger = logging.getLogger("uvicorn.error")
+auth_router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+type db_session = Annotated[AsyncSession, Depends(get_db)]
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"/auth{cool_domain}/token"
+)  # запрос пойдет на {cool_domain}/token
+
+
+async def get_current_user(
+    request: Request,
+    session: db_session,
+) -> UserRegistration:
+    """
+    функция перехватывает токен из кук,
+    чтобы пользователь не вводил данные каждый раз при взаимодействии
+    с веб страничкой
+    """
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(
+            status_code=HTTP_401_UNAUTHORIZED,
+            detail="Token missing in cookies\n or User is not authorized",
+        )
+
+    # не лишняя ли это проверка?
+    user = await get_user(
+        user_id=request.cookies.get("user_id"),
+        session=session,
+    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+    return UserRegistration(**user)
+
+
+@auth_router.post(f"{cool_domain}/registrate")
+async def registrate(
+    user_data: UserRegistration,
+    session: db_session,
+    response: Response,
+):
+    user_id = user_data.user_id
+    user_in_db = await get_user(user_id=user_id)
+
+    if user_in_db:
+        raise HTTPException(
+            status_code=409,
+            detail=f"user with user_id = {user_id} already logged in",
+        )
+
+    await add_user(
+        user_id=user_id,
+        email=user_data.email,
+        password=user_data.password,
+        session=session,
+    )
+
+    response.set_cookie(
+        key="access_token",
+        value=user_id,
+        httponly=True,
+        secure=True,  # для https, но у меня пока http
+    )
+    # возвращаю токен, чтобы пользователь не вводил
+    # свои данные повторно после регистрации
+    return {
+        "message": "Registration successful, you are logged in",
+    }
+
+
+@auth_router.post(f"{cool_domain}/token")
+async def login(
+    response: Response,
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    user_id: UserId,
+    session: db_session,
+):
+    # form_data.username и .password - поля которые объявлены в OAuth2PasswordRequestForm
+    user_dict = await get_user(user_id=user_id, session=session)
+    if not user_dict:
+        raise HTTPException(
+            status_code=400,
+            detail="Incorrect username",
+        )
+    user = UserRegistration(
+        email=user_dict["email"],
+        password=user_dict["hashed_password"],
+    )
+
+    checked_password = await verify_password(
+        plain_password=form_data.password,
+        hashed_password=user.password,
+    )
+    if not (checked_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Incorrect password",
+        )
+    # для сохранения состояния логина
+    response.set_cookie(
+        key="access_token",
+        value=user_id,
+        httponly=True,
+    )
+    return {
+        "access_token": user_id,
+        "token_type": "bearer",
+    }
+
+
+@auth_router.get(f"{cool_domain}/users/me")
+async def read_users_me(
+    current_user: Annotated[UserRegistration, Depends(get_current_user)],
+):
+    """
+    get_current_user - позволяет показывать данные текущего пользователя
+    """
+    return current_user
