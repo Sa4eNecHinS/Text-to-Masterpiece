@@ -11,7 +11,7 @@ export default function WebPage() {
   // как только страница загружается,
   // сразу принимаем куки 
   useEffect(() => {
-    fetch("http://localhost:8000/text-to-masterpiece", {
+    fetch("http://localhost:8000/Text-to-Masterpiece", {
       credentials: "include", // параметр который приказывает браузеру 
                               // принять куки даже если домены разные 
     }).catch((err) => {

@@ -1,11 +1,15 @@
-from backend.api.api import llm_generation
 import asyncio
-import backend.database.db_queries as db
 import logging
 
+import backend.database.db_queries as db
+from backend.api.api import llm_generation
 
-# __name__ - имя текущего файла
-logger = logging.getLogger(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("uvicorn.error")
 
 
 async def guest_or_user(user_id: str) -> bool:

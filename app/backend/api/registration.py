@@ -1,7 +1,9 @@
+import os  # for getenv
 import logging
-from operator import add
+from datetime import timedelta  # for jwt token expiration
 from typing import Annotated
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,57 +12,97 @@ from starlette.status import HTTP_401_UNAUTHORIZED
 from backend.api.fast_api import cool_domain, UserId
 from backend.database.db_queries import get_user, add_user
 from backend.database.dependencies import get_db
-from backend.pydantic_classes.models import UserRegistration
-from backend.database.hash import hash_password, verify_password
+from backend.pydantic_classes.models import (
+    User,
+    Token,
+    TokenData,
+)
+from backend.database.hash import verify_password
+from backend.api.create_jwt import (
+    create_access_token,
+    SECRET_KEY,
+    ALGORITHM,
+)
 
+
+# castomization
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
+)
 
 logger = logging.getLogger("uvicorn.error")
 auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 
-
-type db_session = Annotated[AsyncSession, Depends(get_db)]
-
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"/auth{cool_domain}/token"
 )  # запрос пойдет на {cool_domain}/token
+type db_session = Annotated[AsyncSession, Depends(get_db)]
 
 
 async def get_current_user(
     request: Request,
     session: db_session,
-) -> UserRegistration:
-    """
-    функция перехватывает токен из кук,
-    чтобы пользователь не вводил данные каждый раз при взаимодействии
-    с веб страничкой
-    """
-    token = request.cookies.get("access_token")
-    if not token:
-        raise HTTPException(
-            status_code=HTTP_401_UNAUTHORIZED,
-            detail="Token missing in cookies\n or User is not authorized",
-        )
+    token: Annotated[str, Depends(oauth2_scheme)],
+) -> User:
 
-    # не лишняя ли это проверка?
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not valudate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")  # subject
+
+        if user_id is None:
+            raise credentials_exception
+        token_data = TokenData(user_id=user_id)
+    except jwt.InvalidTokenError:
+        raise credentials_exception
+    # аутенфикация
     user = await get_user(
         user_id=request.cookies.get("user_id"),
         session=session,
     )
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-    return UserRegistration(**user)
+        raise credentials_exception
+    return User(
+        user_id=user["user_id"],
+        email=user["email"],
+        password=user["hashed_password"],
+    )
+
+
+async def authenticate_user(
+    user_id: str,
+    password: str,
+    session: db_session,
+) -> bool | dict[str]:
+    user = await get_user(
+        user_id=user_id,
+        session=session,
+    )
+    if not user:
+        return False
+
+    checked_password = await verify_password(
+        plain_password=password,
+        hashed_password=user["hashed_password"],
+    )
+    if not checked_password:
+        return False
+    return user
 
 
 @auth_router.post(f"{cool_domain}/registrate")
 async def registrate(
-    user_data: UserRegistration,
+    user_data: User,
     session: db_session,
     response: Response,
+    request: Request,
 ):
-    user_id = user_data.user_id
+    user_id = user_data.user_id or request.cookies.get("user_id")
     user_in_db = await get_user(user_id=user_id)
 
     if user_in_db:
@@ -93,47 +135,30 @@ async def registrate(
 async def login(
     response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    user_id: UserId,
     session: db_session,
+    user_id: UserId = None,
 ):
-    # form_data.username и .password - поля которые объявлены в OAuth2PasswordRequestForm
-    user_dict = await get_user(user_id=user_id, session=session)
-    if not user_dict:
+    user = await authenticate_user(
+        session=session, user_id=user_id, password=form_data.password
+    )
+    if not user:
         raise HTTPException(
-            status_code=400,
-            detail="Incorrect username",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    user = UserRegistration(
-        email=user_dict["email"],
-        password=user_dict["hashed_password"],
+    expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
+    access_token_expires = timedelta(minutes=expire_minutes)
+    access_token = await create_access_token(
+        user_data={"sub": user_id},
+        expires_delta=access_token_expires,
     )
 
-    checked_password = await verify_password(
-        plain_password=form_data.password,
-        hashed_password=user.password,
-    )
-    if not (checked_password):
-        raise HTTPException(
-            status_code=400,
-            detail="Incorrect password",
-        )
-    # для сохранения состояния логина
-    response.set_cookie(
-        key="access_token",
-        value=user_id,
-        httponly=True,
-    )
-    return {
-        "access_token": user_id,
-        "token_type": "bearer",
-    }
+    return Token(access_token=access_token, token_type="bearer")
 
 
 @auth_router.get(f"{cool_domain}/users/me")
 async def read_users_me(
-    current_user: Annotated[UserRegistration, Depends(get_current_user)],
-):
-    """
-    get_current_user - позволяет показывать данные текущего пользователя
-    """
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
     return current_user

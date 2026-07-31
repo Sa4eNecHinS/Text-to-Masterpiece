@@ -8,8 +8,16 @@ class GenerateRequest(BaseModel):
     prompt: str
 
 
-class UserRegistration(BaseModel):
-    user_id: Annotated[str | None, Cookie(alias="user_id")] = None
-    token: Annotated[str, Cookie(alias="access_token")] = None
+class User(BaseModel):
+    user_id: str | None = None
     email: str
     password: str
+
+
+class Token(BaseModel):
+    access_token: str | None = None
+    token_type: str
+
+
+class TokenData(BaseModel):
+    user_id: str | None = None

@@ -6,11 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .db_models import SessionLocal, User, UserRequest
 from .hash import (
     hash_password,
-    verify_password,
 )
 
 
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("uvicorn.error")
 
 """
 Добавить управление сессией во все функции 
@@ -73,7 +76,7 @@ async def get_user(user_id: str, session: AsyncSession = None):
         )
 
 
-async def _logic_get_user(user_id: str, session: AsyncSession):
+async def _logic_get_user(user_id: str, session: AsyncSession) -> dict[str]:
     query = select(User).where(User.user_id == user_id)
     result = await session.execute(query)
     user = result.scalar_one_or_none()  # вернет None, если объект не найден

@@ -1,5 +1,4 @@
 import bcrypt
-import asyncio
 
 
 async def hash_password(password: str) -> str:

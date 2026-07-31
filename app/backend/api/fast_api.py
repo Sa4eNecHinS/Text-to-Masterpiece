@@ -16,21 +16,26 @@ from backend.api.api import llm_generation
 from backend.pydantic_classes.models import GenerateRequest
 
 
-router = APIRouter()
-
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger("uvicorn.error")
-cool_domain = "/Text-to-Masterpiece"
 
 
+router = APIRouter()
 type UserId = Annotated[str | None, Cookie(alias="user_id")]
+type db_session = Annotated[AsyncSession, Depends(get_db)]
+
+
+cool_domain = "/Text-to-Masterpiece"
 
 
 @router.get(f"{cool_domain}")
 async def home_page(
     request: Request,
     response: Response,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: db_session,
 ):
     if "user_id" not in request.cookies:
         user_id = str(uuid7())
@@ -53,7 +58,7 @@ async def home_page(
 @router.post(f"{cool_domain}/generate")
 async def generation(
     data: GenerateRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: db_session,
     user_id: UserId,
 ):
     logger.info(f"user_id from cookie: {user_id}")
