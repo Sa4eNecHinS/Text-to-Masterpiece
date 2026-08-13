@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { generateImage } from "./requests";
+import { generateImage } from "@/services/requests";
 
-export default function WebPage() {
+export default function Generate() {
   const [prompt, setPrompt] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -22,13 +22,11 @@ export default function WebPage() {
            // при отображении веб интерфейса
 
 
-  // 🔹 sync handler (UI)
   const handleGenerate = () => {
     if (!prompt.trim() || loading) return;
     handleGenerateAsync();
   };
 
-  // 🔹 async side-effect
   const handleGenerateAsync = async () => {
     try {
       setLoading(true);

@@ -1,4 +1,3 @@
-/* ПОДКЛЮЧЕНИЕ КАСТОМНОГО ШРИФТА */
 @font-face {
   font-family: 'Gazpacho Light';
   src: url('@/fonts/Gazpacho-Light.woff2') format('opentype');

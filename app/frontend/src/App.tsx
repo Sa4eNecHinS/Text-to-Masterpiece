@@ -1,13 +1,17 @@
-import { useState } from "react"
-import ChatLayout from "@/components/ChatLayout"
-import LandingPage from "@/components/LandingPage"
 
-export default function App() {
-  const [showLanding, setShowLanding] = useState(true)
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Home from '@/pages/home/home';
+import Generate from '@/pages/generate/generate';
 
-  return showLanding ? (
-    <LandingPage onEnter={() => setShowLanding(false)} />
-  ) : (
-    <ChatLayout />
-  )
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/Text-to-Masterpiece" element={<Generate />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
+
+export default App;

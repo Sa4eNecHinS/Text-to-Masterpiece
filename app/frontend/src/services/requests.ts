@@ -17,6 +17,12 @@ export type RegisterRequest = {
   email: string
   password: string
 }
+
+/*
+ *сделай сайт с таким же стилем, слева вместо flow shader напиши: "text to\nmasterpiece", т.е masterpiece должен быть на новой строке (без символа \n). справа вместо текста хочу оставить только одну кнопку, которая будет ввести на сайт по определенному эндпоинту. Пиши используя: ts, tsx. Нужна строгая типизация, поэтому typescript
+ * */
+
+
 // регистрация 
 export async function registerUser(data: RegisterRequest) {
   const resp = await fetch(
