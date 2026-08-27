@@ -1,11 +1,11 @@
-import "./home.css";
+import "@/pages/home/home.css";
 import background from "@/assets/b2_1786608771b8b1.png";
 
 const APP_ENDPOINT = "/Text-to-Masterpiece";
 
 const CTA_LABEL = "Create";
 
-const PAGE_LABEL = "/ homepage";
+const PAGE_LABEL = "/ hello, friend!";
 
 export function Home() {
   return (

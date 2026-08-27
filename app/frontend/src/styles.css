@@ -1,34 +1,35 @@
-/* =========== IMPORTS =========== */
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* =========== ROOT VARIABLES =========== */
 :root {
+  --bg: #18181b;          
+  --bg-sidebar: rgba(15, 15, 17, 0.6); /* Сделаем сайдбар полупрозрачным для красоты */
+  --text: #ececec;        
+  --muted: #a1a1aa;       
+  --border: #3f3f46;      
+  --input-bg: #27272a;    
+  --accent: #ffffff;      
+  --accent-hover: #e5e5e5;
+  --pill-bg: #27272a;
+  --btn-bg: #ffffff;
+  --btn-fg: #000000;
+}
+
+/* Светлая тема */
+:root.light {
   --bg: #ffffff;
-  --text: #0f172a;
-  --muted: #64748b;
-  --border: #cbd5e1;
+  --bg-sidebar: rgba(247, 247, 248, 0.6);
+  --text: #1a1a1a;
+  --muted: #666666;
+  --border: #e5e5e5;
+  --input-bg: #f0f0f0;
+  --accent: #000000;
   --pill-bg: #ffffff;
   --btn-bg: #0f172a;
   --btn-fg: #ffffff;
-  --input-bg: #f5f5f5;
-  --btn-bg-pill: #0f172a;
-  --btn-fg-pill: #ffffff;
 }
 
-:root.dark {
-  --bg: #1e1e1e;
-  --text: #e5e7eb;
-  --muted: #9ca3af;
-  --border: #3a3a3a;
-  --pill-bg: #2a2a2a;
-  --btn-bg: #ffffff;
-  --btn-fg: #000000;
-  --input-bg: #2c2c2c;
-  --btn-bg-pill: #ffffff;
-  --btn-fg-pill: #000000;
-}
-
-/* =========== GLOBAL =========== */
+/* =========== GLOBAL RESET =========== */
 * {
   box-sizing: border-box;
 }
@@ -36,126 +37,240 @@
 html, body, #root {
   height: 100%;
   margin: 0;
-  background: var(--bg);
+  /* УБРАЛИ background: var(--bg); отсюда, чтобы не перекрывать картинку */
   color: var(--text);
   font-family: 'JetBrains Mono', monospace;
+  transition: color 0.3s;
 }
 
-.app-root {
-  height: 100%;
+/* =========== CINEMATIC BACKGROUND =========== */
+.cinematic-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0; /* Изменили с -1 на 0 */
+  pointer-events: none;
+  
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  transition: filter 0.5s ease;
+}
+
+/* Затемнение фона */
+.cinematic-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6); /* Чуть сильнее затемним для читаемости */
+  z-index: 1;
+}
+
+:root.light .cinematic-bg::after {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* =========== LAYOUT: CHAT PAGE =========== */
+.chat-shell {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  position: relative;
+  z-index: 2; /* Контент выше фона (который z-index: 0 и 1) */
+}
+
+/* Контейнер одного сообщения */
+.message-row {
+  display: flex;
+  flex-direction: column; /* <--- ВОТ ЭТА СТРОКА ЗАСТАВЛЯЕТ ЭЛЕМЕНТЫ ВСТАВАТЬ ДРУГ ПОД ДРУГОМ */
+  line-height: 1.6;
+  gap: 12px; /* Отступ между текстом "Result:" и картинкой */
+}
+
+/* Для сообщений пользователя выравниваем по правому краю */
+.message-row.user { 
+  align-items: flex-end; 
+}
+
+/* Для сообщений AI выравниваем по левому краю */
+.message-row.ai { 
+  align-items: flex-start; 
+}
+
+/* Текст сообщения */
+.message-text {
+  padding: 8px 0;
+  color: var(--text);
+}
+
+/* Сама картинка */
+.generated-image {
+  margin-top: 4px;
+  border-radius: 12px;
+  max-width: 100%;
+  width: 512px; /* Или любой другой размер, чтобы не растягивалась на весь экран */
+  max-height: 512px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  display: block; /* <--- ВАЖНО: убирает inline-поведение картинки */
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5); /* Добавим красивую тень для портфолио */
+}
+
+/* --- Sidebar --- */
+.chat-sidebar {
+  width: 60px;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  padding-top: 20px;
+  gap: 20px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
 }
 
-/* =========== TOPBAR / HEADER =========== */
-.topbar {
-  height: 56px;
+.sidebar-icon {
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.menu-btn {
-  background: none;
-  border: none;
-  font-size: 22px;
+  justify-content: center;
+  border-radius: 8px;
   cursor: pointer;
-  color: var(--text);
-  position: relative;
-  z-index: 20;
-}
-
-.title {
-  flex: 1;
-  text-align: center;
+  color: var(--muted);
+  transition: 0.2s;
   font-size: 18px;
 }
 
-.topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 14px;
+.sidebar-icon:hover, .sidebar-icon.active {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: var(--text);
 }
 
-/* =========== THEME TOGGLE =========== */
-.theme-toggle {
-  width: 52px;
-  height: 28px;
-  border-radius: 999px;
-  border: none;
-  background: var(--input-bg);
-  cursor: pointer;
-  position: relative;
-}
-
-.theme-toggle.dark {
-  background: var(--input-bg);
-}
-
-.theme-toggle .icon {
-  position: absolute;
-  top: 3px;
-  left: 4px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.25s ease;
-}
-
-.theme-toggle.dark .icon {
-  transform: translateX(24px);
-}
-
-/* =========== DRAWER =========== */
-.drawer-backdrop {
-  position: fixed;
-  top: 56px;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0,0,0,0.4);
-  z-index: 5;
-}
-
-.drawer {
-  position: fixed;
-  top: 56px;
-  left: 0;
-  width: 340px;
-  height: calc(100% - 56px);
-  background: var(--bg);
-  padding: 28px;
-  z-index: 10;
-  box-shadow: 4px 0 20px rgba(0,0,0,0.15);
-}
-
-/* =========== CHAT AREA =========== */
-.chat-area {
+/* --- Main Content Area --- */
+.chat-main {
   flex: 1;
   display: flex;
+  flex-direction: column;
+  position: relative;
+  background: transparent; 
+}
+
+/* --- Header --- */
+.chat-header {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  width: 100%;
+}
+
+/* =========== HERO CENTERING =========== */
+.hero-center-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+  z-index: 10;
 }
 
-/* =========== INPUT BAR =========== */
-.input-wrapper {
-  width: 50%;
-  margin: 0 auto;
-  padding: 12px;
+.hero-glass-window {
+  pointer-events: auto;
+  background: rgba(20, 20, 20, 0.4); /* Более прозрачный для glassmorphism */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 24px;
+  padding: 40px;
+  width: 90%;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
+:root.light .hero-glass-window {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.hero-glass-window.hidden {
+  opacity: 0;
+  transform: translateY(-20px) scale(0.95);
+  pointer-events: none;
+}
+
+.hero-title {
+  font-size: 1.8rem;
+  font-weight: 400;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text);
+  text-align: center;
+  margin: 0;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+
+/* =========== TRANSITIONING INPUT =========== */
+.input-transition-wrapper {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.input-transition-wrapper.centered {
+  position: relative;
+  width: 100%;
+}
+
+.input-transition-wrapper.bottom {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  max-width: 700px;
+  z-index: 20;
+}
+
+/* Glassmorphism для инпута */
+.glass {
+  background: rgba(30, 30, 30, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+:root.light .glass {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Стили пилюли (берем ваши старые, но чуть адаптируем) */
 .input-pill {
   display: flex;
   align-items: center;
-  background-color: var(--input-bg);
-  border-radius: 25px;
-  padding: 6px 12px;
-  transition: background 0.2s ease;
+  border-radius: 28px;
+  padding: 8px 12px;
+  width: 100%;
+  max-width: 700px;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .prompt-input {
@@ -169,134 +284,28 @@ html, body, #root {
   line-height: 1.4;
   margin-right: 8px;
   color: var(--text);
+  overflow: hidden;
+  height: 24px;
+  padding: 0;
 }
 
 .send-btn {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
+  background-color: var(--text);
+  color: var(--bg);
+  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  border: none;
-  background-color: var(--btn-bg-pill);
-  transition: background 0.2s ease;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
-.send-btn:hover {
-  filter: brightness(1.1);
-}
-
-.send-icon {
-  width: 18px;
-  height: 18px;
-  stroke: var(--btn-fg-pill);
-}
-
-/* =========== AUTH BUTTONS =========== */
-.auth-buttons {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.signin-btn,
-.signup-btn {
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 14px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.signin-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-}
-
-.signup-btn {
-  background: var(--text);
-  border: none;
-  color: var(--bg);
-}
-
-.signin-btn:hover,
-.signup-btn:hover {
-  opacity: 0.9;
-}
-
-/* =========== MODAL =========== */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal {
-  background: var(--bg);
-  color: var(--text);
-  padding: 30px;
-  border-radius: 14px;
-  width: 360px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.modal input {
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
-
-.modal button {
-  padding: 10px;
-  border-radius: 8px;
-  border: none;
-  background: var(--text);
-  color: var(--bg);
-  cursor: pointer;
-}
-
-.modal div[style*="color: red"] {
-  margin-top: -4px;
-  margin-bottom: 4px;
-}
-
-/* =========== SUCCESS MESSAGE =========== */
-.success-message {
-  background-color: rgba(40, 167, 69, 0.2);
-  color: #28a745;
-  text-align: center;
-  padding: 6px 0;
-  border-radius: 6px;
-  margin-bottom: 10px;
-  font-size: 14px;
-  margin-left: 20px;
-  margin-right: 20px;
-}
-
-/* =========== USER ICON =========== */
-.user-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  overflow: hidden;
-  cursor: pointer;
-}
-
-.user-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

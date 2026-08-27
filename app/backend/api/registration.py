@@ -1,15 +1,15 @@
-import os  # for getenv
+import os
 import logging
 from datetime import timedelta  # for jwt token expiration
 from typing import Annotated
+from dotenv import load_dotenv
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, Cookie
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_401_UNAUTHORIZED
 
-from backend.api.fast_api import cool_domain, UserId
 from backend.database.db_queries import get_user, add_user
 from backend.database.dependencies import get_db
 from backend.pydantic_classes.models import (
@@ -24,19 +24,21 @@ from backend.api.create_jwt import (
     ALGORITHM,
 )
 
+load_dotenv()
 
-# castomization
 logging.basicConfig(
     level=logging.INFO,
     format="[%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
 )
-
 logger = logging.getLogger("uvicorn.error")
 auth_router = APIRouter(prefix="/auth", tags=["Auth"])
+domain = "/Text-to-Masterpiece"
 
 oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"/auth{cool_domain}/token"
-)  # запрос пойдет на {cool_domain}/token
+    tokenUrl=f"/{domain}/auth/token",
+)
+
+type UserId = Annotated[str | None, Cookie(alias="user_id")]
 type db_session = Annotated[AsyncSession, Depends(get_db)]
 
 
@@ -57,7 +59,9 @@ async def get_current_user(
 
         if user_id is None:
             raise credentials_exception
+
         token_data = TokenData(user_id=user_id)
+
     except jwt.InvalidTokenError:
         raise credentials_exception
     # аутенфикация
@@ -92,10 +96,11 @@ async def authenticate_user(
     )
     if not checked_password:
         return False
+
     return user
 
 
-@auth_router.post(f"{cool_domain}/registrate")
+@auth_router.post(f"{domain}/registrate")
 async def registrate(
     user_data: User,
     session: db_session,
@@ -131,7 +136,7 @@ async def registrate(
     }
 
 
-@auth_router.post(f"{cool_domain}/token")
+@auth_router.post(f"{domain}/token")
 async def login(
     response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
@@ -157,7 +162,7 @@ async def login(
     return Token(access_token=access_token, token_type="bearer")
 
 
-@auth_router.get(f"{cool_domain}/users/me")
+@auth_router.get(f"{domain}/users/me")
 async def read_users_me(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:

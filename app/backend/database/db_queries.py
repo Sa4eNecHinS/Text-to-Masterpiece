@@ -76,7 +76,7 @@ async def get_user(user_id: str, session: AsyncSession = None):
         )
 
 
-async def _logic_get_user(user_id: str, session: AsyncSession) -> dict[str]:
+async def _logic_get_user(user_id: str, session: AsyncSession) -> dict[str] | None:
     query = select(User).where(User.user_id == user_id)
     result = await session.execute(query)
     user = result.scalar_one_or_none()  # вернет None, если объект не найден
@@ -132,8 +132,52 @@ async def _update_logic_user_email_and_password(
     except Exception as err:
         await session.rollback()
         logger.info(
-            f"Error happend while UPDATE email and password, with user_id - {user_id}\n{err}"
+            f"Error happend while UPDATE email and password, with user_id - {user_id}\n{
+                err
+            }"
         )
+
+
+async def get_chat_history(
+    user_id: str,
+    session: AsyncSession = None,
+):
+    if session is None:
+        async with SessionLocal() as session:
+            return await _logic_get_chat_history(
+                user_id=user_id,
+                session=session,
+            )
+    else:
+        return await _logic_get_chat_history(
+            user_id=user_id,
+            session=session,
+        )
+
+
+async def _logic_get_chat_history(
+    user_id: str,
+    session: AsyncSession,
+):
+    try:
+        history = await session.execute(select(User).where(User.user_id == user_id))
+
+        if not history.scalar_one_or_none():
+            logger.info("User has no history")
+            return 0
+
+        return {
+            "chat_history": history,
+            "user_id": user_id,
+        }
+
+    except Exception as err:
+        logger.error(
+            f"Error happened when try to get chat history for user_id={user_id}.\nErr={
+                err
+            }"
+        )
+        return None
 
 
 async def add_prompt_and_image(
@@ -184,7 +228,9 @@ async def _logic_add_prompt_and_image(
     except Exception as err:
         await session.rollback()
         logger.error(
-            f"Error happened when try to save new prompt for user_id={user_id}.\nErr={err}"
+            f"Error happened when try to save new prompt for user_id={user_id}.\nErr={
+                err
+            }"
         )
         return 0
 

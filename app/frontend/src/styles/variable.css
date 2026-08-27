@@ -1,0 +1,23 @@
+:root {
+  --bg-body: #18181b;       /* Основной фон */
+  --bg-sidebar: #0f0f11;    /* Фон сайдбара (чуть темнее) */
+  --bg-input: #27272a;      /* Фон инпута */
+  --bg-hover: #3f3f46;      /* Ховер эффекты */
+  
+  --text-primary: #ececec;  /* Белый текст */
+  --text-secondary: #a1a1aa;/* Серый текст */
+  --border-color: #3f3f46;  /* Границы */
+  
+  --accent-color: #ffffff;  /* Кнопки/иконки белые или светлые */
+  --radius-lg: 24px;        /* Скругление инпута */
+}
+
+[data-theme='light'] {
+  --bg-body: #ffffff;
+  --bg-sidebar: #f7f7f8;
+  --bg-input: #f0f0f0;
+  --text-primary: #1a1a1a;
+  --text-secondary: #666666;
+  --border-color: #e5e5e5;
+  --accent-color: #000000;
+}

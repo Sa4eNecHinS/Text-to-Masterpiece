@@ -1,7 +1,7 @@
 
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Home from '@/pages/home/home';
-import Generate from '@/pages/generate/generate';
+import Generate from '@/pages/generate/GeneratePage';
 
 function App() {
   return (

@@ -18,9 +18,6 @@ async def create_access_token(
     to_encode = user_data.copy()  # чтобы не изменить оригинал
 
     if expires_delta:
-        # timezone.utc - стандарт, чтобы не возник конфликт при
-        # загрузке кода на сервер, т.к скорее всего там будет идти
-        # отсчет от нулевого меридиана (utc)
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datatime.now(timezone.utc) + timedelta(minutes=20)
