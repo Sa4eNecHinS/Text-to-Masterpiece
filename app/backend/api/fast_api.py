@@ -1,93 +1,134 @@
 import logging
-import os
-
-from fastapi import APIRouter, Response, Request, Cookie, Depends
-from uuid import uuid7
 from typing import Annotated
+from uuid import uuid7
+
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from dotenv import load_dotenv
 
-
+from backend.api.registration import (
+    COOKIE_SAMESITE,
+    COOKIE_SECURE,
+    get_optional_current_user,
+)
+from backend.database.db_models import Guest, User
 from backend.database.db_queries import (
-    add_user,
+    add_guest,
     add_prompt_and_image,
-    update_user_email_and_password,
-    get_chat_history,
+    get_guest_by_uuid,
+    get_guest_chat_history,
+    get_user_chat_history,
 )
 from backend.database.dependencies import get_db
-from backend.api.llm import llm_generation
 from backend.pydantic_classes.models import GenerateRequest
 
 
-load_dotenv()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger("uvicorn.error")
 router = APIRouter()
 domain = "/Text-to-Masterpiece"
 
-type UserId = Annotated[str | None, Cookie(alias="user_id")]
+type GuestId = Annotated[str | None, Cookie(alias="guest_id")]
 type db_session = Annotated[AsyncSession, Depends(get_db)]
+type OptionalUser = Annotated[User | None, Depends(get_optional_current_user)]
+
+
+def _set_guest_cookie(response: Response, guest: Guest) -> None:
+    response.set_cookie(
+        key="guest_id",
+        value=str(guest.guest_id),
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite=COOKIE_SAMESITE,
+        path="/",
+    )
+
+
+async def _get_or_create_guest(
+    guest_uuid: str | None,
+    response: Response,
+    session: AsyncSession,
+) -> Guest:
+    guest = await get_guest_by_uuid(guest_uuid, session) if guest_uuid else None
+    if guest is not None:
+        return guest
+
+    guest = await add_guest(uuid7(), session)
+    _set_guest_cookie(response, guest)
+    return guest
 
 
 @router.get(f"{domain}")
 async def home_page(
-    request: Request,
     response: Response,
     db: db_session,
+    current_user: OptionalUser,
+    guest_uuid: GuestId = None,
 ):
-    if "user_id" not in request.cookies:
-        user_id = str(uuid7())
+    if current_user is not None:
+        return {"ok": True}
 
-        response.set_cookie(
-            key="user_id",
-            value=user_id,
-            httponly=False,  # позволяет JS доставать куки из document.cookie
-            samesite="none",  # чтобы кука принималась с другого домена
-            secure=True,  # True - куки не будет предеоваться по HTTPS, а будет по HTTP
-            # False - куки передается по всем протоколам
-        )
+    try:
+        guest = await _get_or_create_guest(guest_uuid, response, db)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
-        # подводный камень в том, что пока куки не очищаются
-        # и код после if не проходит
-
-    return {"ok": True}
+    return {"ok": True, "guest_id": str(guest.guest_id)}
 
 
 @router.get(f"{domain}/chat_history")
 async def chat_history(
-    user_id: UserId,
     db: db_session,
+    current_user: OptionalUser,
+    guest_uuid: GuestId = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ):
-    logger.info(f"Get user_history for user_id={user_id}")
-    chat_history = await get_chat_history(
-        user_id=user_id,
-        session=db,
-    )
+    if current_user is not None:
+        return await get_user_chat_history(
+            current_user.id, db, limit=limit, offset=offset
+        )
 
-    return chat_history
+    guest = await get_guest_by_uuid(guest_uuid, db) if guest_uuid else None
+    if guest is None:
+        return []
+    return await get_guest_chat_history(guest.id, db, limit=limit, offset=offset)
 
 
 @router.post(f"{domain}/generate")
 async def generation(
     data: GenerateRequest,
+    response: Response,
     db: db_session,
-    user_id: UserId,
+    current_user: OptionalUser,
+    guest_uuid: GuestId = None,
 ):
-    prompt = data.prompt
-    # img_url = await llm_generation(prompt=prompt, user_id=user_id)
-    plug_img_url = "https://picsum.photos/512/512"  # заглушка
-    await add_prompt_and_image(
-        user_id=user_id,
-        prompt=prompt,
-        image_url=plug_img_url,
-        session=db,
-    )
+    # img_url = await llm_generation(prompt=data.prompt, user_id=...)
+    image_url = "https://picsum.photos/512/512"
 
-    return {"image_url": plug_img_url}
+    try:
+        if current_user is not None:
+            await add_prompt_and_image(
+                user_id=current_user.id,
+                prompt=data.prompt,
+                image_url=image_url,
+                session=db,
+            )
+        else:
+            guest = await _get_or_create_guest(guest_uuid, response, db)
+            await add_prompt_and_image(
+                guest_id=guest.id,
+                prompt=data.prompt,
+                image_url=image_url,
+                session=db,
+            )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Failed to persist generation")
+        raise HTTPException(status_code=500, detail="Failed to save generation")
+
+    return {"image_url": image_url}
 
 
 @router.get(f"{domain}/about_me")

@@ -8,7 +8,6 @@ export default function GeneratePage() {
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
 
   const isChatMode = messages.length > 0;
 
@@ -16,17 +15,6 @@ export default function GeneratePage() {
     fetch("http://localhost:8000/Text-to-Masterpiece", { credentials: "include" }).catch(console.error);
   }, []);
 
-  useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('light');
-    } else {
-      document.documentElement.classList.add('light');
-      document.documentElement.classList.remove('dark');
-    }
-  }, [theme]);
-
-  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
@@ -49,16 +37,12 @@ export default function GeneratePage() {
   };
 
   return (
-    <AppLayout theme={theme} onToggleTheme={toggleTheme}>
+    <AppLayout>
       
-      {/* КОНТЕЙНЕР ДЛЯ ЦЕНТРИРОВАНИЯ (Welcome Screen) */}
-      {/* Теперь он исчезает только после отправки (когда появится сообщение) */}
       <div className="hero-center-wrapper">
         <div className={`hero-glass-window ${isChatMode ? 'hidden' : ''}`}>
           <h1 className="hero-title">Create your masterpiece</h1>
           
-          {/* Инпут внутри центрального окна. 
-              Мы рендерим его всегда, пока !isChatMode, чтобы не терять фокус при вводе */}
           {!isChatMode && (
             <div className="input-transition-wrapper centered">
               <ChatInput 
@@ -74,14 +58,13 @@ export default function GeneratePage() {
         </div>
       </div>
 
-      {/* СПИСОК СООБЩЕНИЙ (появляется в режиме чата) */}
+      {/* messages list */}
       {isChatMode && (
         <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '120px', paddingTop: '20px' }}>
            <MessageList messages={messages} loading={loading} />
         </div>
       )}
 
-      {/* НИЖНИЙ ИНПУТ (появляется в режиме чата) */}
       {isChatMode && (
         <div className="input-transition-wrapper bottom">
           <ChatInput 

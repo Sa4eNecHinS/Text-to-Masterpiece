@@ -1,138 +1,185 @@
-import os
 import logging
-from datetime import timedelta  # for jwt token expiration
+import os
+from datetime import timedelta
 from typing import Annotated
-from dotenv import load_dotenv
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, Cookie
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from dotenv import load_dotenv
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.status import HTTP_401_UNAUTHORIZED
 
-from backend.database.db_queries import get_user, add_user
+from backend.api.create_jwt import ALGORITHM, SECRET_KEY, create_access_token
+from backend.database.db_models import User
+from backend.database.db_queries import (
+    add_user,
+    get_guest_by_uuid,
+    get_user_by_email,
+    get_user_by_id,
+    merge_guest_requests_into_user,
+)
 from backend.database.dependencies import get_db
-from backend.pydantic_classes.models import (
-    User,
-    Token,
-    TokenData,
-)
 from backend.database.hash import verify_password
-from backend.api.create_jwt import (
-    create_access_token,
-    SECRET_KEY,
-    ALGORITHM,
-)
+from backend.pydantic_classes.models import UserPublic, UserRegistration
+
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger("uvicorn.error")
 auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 domain = "/Text-to-Masterpiece"
 
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"/{domain}/auth/token",
-)
-
-type UserId = Annotated[str | None, Cookie(alias="user_id")]
 type db_session = Annotated[AsyncSession, Depends(get_db)]
+type AccessToken = Annotated[str | None, Cookie(alias="access_token")]
+type GuestId = Annotated[str | None, Cookie(alias="guest_id")]
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+COOKIE_SECURE = _env_bool("COOKIE_SECURE", default=False)
+COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()
+if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+    raise RuntimeError("COOKIE_SAMESITE must be one of: lax, strict, none")
+if COOKIE_SAMESITE == "none" and not COOKIE_SECURE:
+    raise RuntimeError("COOKIE_SAMESITE=none requires COOKIE_SECURE=true")
+
+
+def _token_expiry() -> timedelta:
+    raw_value = os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "20")
+    try:
+        minutes = int(raw_value)
+    except ValueError as error:
+        raise RuntimeError("ACCESS_TOKEN_EXPIRE_MINUTES must be an integer") from error
+    if minutes <= 0:
+        raise RuntimeError("ACCESS_TOKEN_EXPIRE_MINUTES must be positive")
+    return timedelta(minutes=minutes)
+
+
+def _set_access_token_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite=COOKIE_SAMESITE,
+        path="/",
+        max_age=int(_token_expiry().total_seconds()),
+    )
+
+
+def _clear_guest_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key="guest_id",
+        path="/",
+        secure=COOKIE_SECURE,
+        httponly=True,
+        samesite=COOKIE_SAMESITE,
+    )
+
+
+async def _user_from_token(token: str | None, session: AsyncSession) -> User | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = int(payload["sub"])
+    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
+        return None
+    return await get_user_by_id(user_id=user_id, session=session)
+
+
+async def get_optional_current_user(
+    session: db_session,
+    access_token: AccessToken = None,
+) -> User | None:
+    return await _user_from_token(access_token, session)
 
 
 async def get_current_user(
-    request: Request,
     session: db_session,
-    token: Annotated[str, Depends(oauth2_scheme)],
+    access_token: AccessToken = None,
 ) -> User:
-
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not valudate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")  # subject
-
-        if user_id is None:
-            raise credentials_exception
-
-        token_data = TokenData(user_id=user_id)
-
-    except jwt.InvalidTokenError:
-        raise credentials_exception
-    # аутенфикация
-    user = await get_user(
-        user_id=request.cookies.get("user_id"),
-        session=session,
-    )
-    if not user:
-        raise credentials_exception
-    return User(
-        user_id=user["user_id"],
-        email=user["email"],
-        password=user["hashed_password"],
-    )
+    user = await _user_from_token(access_token, session)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
+    return user
 
 
 async def authenticate_user(
-    user_id: str,
+    email: str,
     password: str,
-    session: db_session,
-) -> bool | dict[str]:
-    user = await get_user(
-        user_id=user_id,
-        session=session,
-    )
-    if not user:
-        return False
-
-    checked_password = await verify_password(
+    session: AsyncSession,
+) -> User | None:
+    user = await get_user_by_email(email=email, session=session)
+    if user is None:
+        return None
+    if not await verify_password(
         plain_password=password,
-        hashed_password=user["hashed_password"],
-    )
-    if not checked_password:
-        return False
-
+        hashed_password=user.password,
+    ):
+        return None
     return user
 
 
 @auth_router.post(f"{domain}/registrate")
 async def registrate(
-    user_data: User,
+    user_data: UserRegistration,
     session: db_session,
     response: Response,
-    request: Request,
+    guest_uuid: GuestId = None,
 ):
-    user_id = user_data.user_id or request.cookies.get("user_id")
-    user_in_db = await get_user(user_id=user_id)
+    try:
+        async with session.begin():
+            if await get_user_by_email(user_data.email, session) is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A user with this email already exists",
+                )
 
-    if user_in_db:
-        raise HTTPException(
-            status_code=409,
-            detail=f"user with user_id = {user_id} already logged in",
-        )
+            user = await add_user(
+                email=user_data.email,
+                password=user_data.password,
+                session=session,
+            )
 
-    await add_user(
-        user_id=user_id,
-        email=user_data.email,
-        password=user_data.password,
-        session=session,
+            guest = (
+                await get_guest_by_uuid(guest_uuid, session) if guest_uuid else None
+            )
+            if guest is not None:
+                await merge_guest_requests_into_user(
+                    guest_id=guest.id,
+                    user_id=user.id,
+                    session=session,
+                )
+    except IntegrityError as error:
+        logger.exception("Registration failed for email %s", user_data.email)
+        if getattr(error.orig, "sqlstate", None) == "23505":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this email already exists",
+            ) from error
+        raise
+
+    access_token = create_access_token(
+        user_data={"sub": str(user.id)},
+        expires_delta=_token_expiry(),
     )
+    _set_access_token_cookie(response, access_token)
+    if guest_uuid is not None:
+        _clear_guest_cookie(response)
 
-    response.set_cookie(
-        key="access_token",
-        value=user_id,
-        httponly=True,
-        secure=True,  # для https, но у меня пока http
-    )
-    # возвращаю токен, чтобы пользователь не вводил
-    # свои данные повторно после регистрации
     return {
-        "message": "Registration successful, you are logged in",
+        "message": "Registration successful",
+        "user": UserPublic(id=user.id, email=user.email),
     }
 
 
@@ -141,29 +188,44 @@ async def login(
     response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     session: db_session,
-    user_id: UserId = None,
+    guest_uuid: GuestId = None,
 ):
-    user = await authenticate_user(
-        session=session, user_id=user_id, password=form_data.password
-    )
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+    async with session.begin():
+        user = await authenticate_user(
+            email=form_data.username,
+            password=form_data.password,
+            session=session,
         )
-    expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
-    access_token_expires = timedelta(minutes=expire_minutes)
-    access_token = await create_access_token(
-        user_data={"sub": user_id},
-        expires_delta=access_token_expires,
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
+
+        guest = await get_guest_by_uuid(guest_uuid, session) if guest_uuid else None
+        if guest is not None:
+            await merge_guest_requests_into_user(
+                guest_id=guest.id,
+                user_id=user.id,
+                session=session,
+            )
+
+    access_token = create_access_token(
+        user_data={"sub": str(user.id)},
+        expires_delta=_token_expiry(),
     )
+    _set_access_token_cookie(response, access_token)
+    if guest_uuid is not None:
+        _clear_guest_cookie(response)
 
-    return Token(access_token=access_token, token_type="bearer")
+    return {
+        "message": "Login successful",
+        "user": UserPublic(id=user.id, email=user.email),
+    }
 
 
-@auth_router.get(f"{domain}/users/me")
+@auth_router.get(f"{domain}/users/me", response_model=UserPublic)
 async def read_users_me(
     current_user: Annotated[User, Depends(get_current_user)],
-) -> User:
-    return current_user
+) -> UserPublic:
+    return UserPublic(id=current_user.id, email=current_user.email)

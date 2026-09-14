@@ -2,31 +2,21 @@
 
 /* =========== ROOT VARIABLES =========== */
 :root {
-  --bg: #18181b;          
-  --bg-sidebar: rgba(15, 15, 17, 0.6); /* Сделаем сайдбар полупрозрачным для красоты */
-  --text: #ececec;        
-  --muted: #a1a1aa;       
-  --border: #3f3f46;      
-  --input-bg: #27272a;    
-  --accent: #ffffff;      
+  --bg: #18181b;
+  --bg-sidebar: rgba(20, 20, 20, 0.6);
+
+  --glass-bg: rgba(20, 20, 20, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.1);
+
+  --text: #ececec;
+  --muted: #a1a1aa;
+  --border: #3f3f46;
+  --input-bg: #27272a;
+  --accent: #ffffff;
   --accent-hover: #e5e5e5;
   --pill-bg: #27272a;
   --btn-bg: #ffffff;
   --btn-fg: #000000;
-}
-
-/* Светлая тема */
-:root.light {
-  --bg: #ffffff;
-  --bg-sidebar: rgba(247, 247, 248, 0.6);
-  --text: #1a1a1a;
-  --muted: #666666;
-  --border: #e5e5e5;
-  --input-bg: #f0f0f0;
-  --accent: #000000;
-  --pill-bg: #ffffff;
-  --btn-bg: #0f172a;
-  --btn-fg: #ffffff;
 }
 
 /* =========== GLOBAL RESET =========== */
@@ -85,7 +75,7 @@ html, body, #root {
 /* Контейнер одного сообщения */
 .message-row {
   display: flex;
-  flex-direction: column; /* <--- ВОТ ЭТА СТРОКА ЗАСТАВЛЯЕТ ЭЛЕМЕНТЫ ВСТАВАТЬ ДРУГ ПОД ДРУГОМ */
+  flex-direction: column; 
   line-height: 1.6;
   gap: 12px; /* Отступ между текстом "Result:" и картинкой */
 }
@@ -119,54 +109,323 @@ html, body, #root {
   box-shadow: 0 4px 20px rgba(0,0,0,0.5); /* Добавим красивую тень для портфолио */
 }
 
-/* --- Sidebar --- */
-.chat-sidebar {
-  width: 60px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 20px;
-  gap: 20px;
-  border-right: 1px solid rgba(255, 255, 255, 0.1);
-  flex-shrink: 0;
-}
+/* =========== LOGIN ISLAND =========== */
 
-.sidebar-icon {
-  width: 36px;
-  height: 36px;
+.login-island {
+  height: 38px;
+
+  padding: 0 16px;
+
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+
+  border-radius: 14px;
+
+  color: var(--text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  font-weight: 500;
+
   cursor: pointer;
-  color: var(--muted);
-  transition: 0.2s;
-  font-size: 18px;
+
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
 }
 
-.sidebar-icon:hover, .sidebar-icon.active {
-  background-color: rgba(255, 255, 255, 0.1);
+.login-island:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.login-island:active {
+  transform: translateY(0);
+}
+
+/* =========== SIDEBAR =========== */
+
+.chat-sidebar {
+  height: 100%;
+  flex-shrink: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  overflow: hidden;
+
+  transition:
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.2s ease;
+}
+
+
+/* Sidebar полностью исчезает */
+
+.chat-sidebar.collapsed {
+  width: 0;
+  opacity: 0;
+  border: none;
+}
+
+
+/* Открытый sidebar */
+
+.chat-sidebar.expanded {
+  width: 260px;
+  opacity: 1;
+
+  border-right: 1px solid var(--glass-border);
+}
+
+
+/* =========== SIDEBAR HEADER =========== */
+
+.sidebar-header {
+  height: 60px;
+  min-height: 60px;
+
+  display: flex;
+  align-items: center;
+
+  padding: 0 12px;
+}
+
+
+.sidebar-icon {
+  width: 40px;
+  height: 36px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  flex-shrink: 0;
+
+  border: none;
+  border-radius: 8px;
+
+  background: transparent;
+  color: var(--muted);
+
+  cursor: pointer;
+
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+
+.sidebar-icon:hover {
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text);
 }
 
-/* --- Main Content Area --- */
-.chat-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  background: transparent; 
-}
 
-/* --- Header --- */
-.chat-header {
-  height: 60px;
+/* =========== CLOSED SIDEBAR BUTTON =========== */
+
+.sidebar-open-button {
+  position: absolute;
+
+  top: 12px;
+  left: 12px;
+
+  width: 36px;
+  height: 36px;
+
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  width: 100%;
+  justify-content: center;
+
+  border: none;
+  border-radius: 8px;
+
+  background: transparent;
+  color: rgba(235, 230, 230, .8);
+
+  cursor: pointer;
+
+  z-index: 30;
+
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
 }
+
+
+.sidebar-open-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+
+/* =========== SIDEBAR FOOTER =========== */
+
+.sidebar-footer {
+  margin-top: auto;
+
+  width: 100%;
+
+  padding: 12px;
+}
+
+
+.sidebar-login {
+  width: 100%;
+  height: 40px;
+
+  display: flex;
+  align-items: center;
+
+  gap: 10px;
+
+  padding: 0 10px;
+
+  border: none;
+  border-radius: 9px;
+
+  background: transparent;
+  color: var(--muted);
+
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+
+  cursor: pointer;
+
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+
+.sidebar-login:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+
+.sidebar-login-text {
+  white-space: nowrap;
+}
+/* =========== MAIN CONTENT =========== */
+
+.chat-main {
+  flex: 1;
+  min-width: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  position: relative;
+  background: transparent;
+}
+
+
+/* =========== HEADER =========== */
+
+.chat-header {
+  width: 100%;
+  height: 60px;
+  min-height: 60px;
+
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+
+  padding: 12px 20px;
+}
+
+
+/* =========== CHAT HISTORY =========== */
+
+.chat-history {
+  flex: 1;
+
+  display: flex;
+  flex-direction: column;
+
+  min-width: 260px;
+
+  padding: 8px 12px 16px;
+
+  opacity: 1;
+
+  transition: opacity 0.2s ease;
+}
+
+
+/* Пока sidebar закрыт — содержимое скрыто */
+.chat-history.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+
+/* Когда sidebar открыт */
+.chat-history.visible {
+  opacity: 1;
+  pointer-events: auto;
+
+  transition-delay: 0.08s;
+}
+
+
+/* Заголовок */
+.chat-history-title {
+  margin-bottom: 10px;
+  padding: 0 8px;
+
+  font-size: 12px;
+  color: var(--muted);
+
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+
+/* Список чатов */
+.chat-history-list {
+  display: flex;
+  flex-direction: column;
+
+  gap: 4px;
+
+  overflow-y: auto;
+}
+
+
+/* Один чат */
+.chat-history-item {
+  width: 100%;
+
+  padding: 10px 12px;
+
+  border: none;
+  border-radius: 8px;
+
+  background: transparent;
+  color: var(--text);
+
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+
+  text-align: left;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  cursor: pointer;
+
+  transition: background-color 0.2s ease;
+}
+
+
+.chat-history-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 
 /* =========== HERO CENTERING =========== */
 .hero-center-wrapper {
@@ -251,10 +510,10 @@ html, body, #root {
 
 /* Glassmorphism для инпута */
 .glass {
-  background: rgba(30, 30, 30, 0.4);
+  background: var(--glass-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--glass-border);
 }
 
 :root.light .glass {

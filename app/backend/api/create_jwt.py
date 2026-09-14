@@ -1,27 +1,27 @@
 import os
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import jwt
+from dotenv import load_dotenv
 
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM")  # for jwt token
+ALGORITHM = os.getenv("ALGORITHM")
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required")
+if not ALGORITHM:
+    raise RuntimeError("ALGORITHM environment variable is required")
 
 
-async def create_access_token(
+def create_access_token(
     user_data: dict,
-    expires_delta=None,
-) -> dict:
-    # jwt токен не зашифровывает данные, которые передаются по интернету
-    # но он не дает изменять их без правильной подписи
-
-    to_encode = user_data.copy()  # чтобы не изменить оригинал
-
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datatime.now(timezone.utc) + timedelta(minutes=20)
-
-    to_encode.update({"exp": expire})  # истечение времени ключа
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    expires_delta: timedelta | None = None,
+) -> str:
+    to_encode = user_data.copy()
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=20))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

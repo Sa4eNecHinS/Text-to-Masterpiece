@@ -39,7 +39,6 @@ export const MessageList = ({ messages, loading }: MessageListProps) => {
             alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' 
           }}
         >
-          {/* Текстовый блок */}
           {msg.content && (
             <div style={{
               backgroundColor: msg.role === 'user' ? 'var(--input-bg)' : 'transparent',
@@ -49,13 +48,12 @@ export const MessageList = ({ messages, loading }: MessageListProps) => {
               lineHeight: 1.5,
               border: msg.role === 'user' ? '1px solid var(--border)' : 'none',
               color: 'var(--text)',
-              marginBottom: msg.image ? '12px' : '0' // Отступ снизу, если есть картинка
+              marginBottom: msg.image ? '12px' : '0' 
             }}>
               {msg.content}
             </div>
           )}
 
-          {/* Блок с картинкой (теперь он ОТДЕЛЬНО от текста) */}
           {msg.image && (
             <img 
               src={msg.image} 
@@ -63,12 +61,12 @@ export const MessageList = ({ messages, loading }: MessageListProps) => {
               style={{ 
                 borderRadius: '12px', 
                 maxWidth: '100%', 
-                width: '512px', // Фиксируем красивый размер для заглушки/картинки
+                width: '512px', 
                 maxHeight: '512px',
                 objectFit: 'cover',
                 border: '1px solid var(--border)',
-                display: 'block', // <--- ЭТА СТРОКА ЛЕЧИТ БАГ С ПОЗИЦИЕЙ
-                boxShadow: '0 4px 20px rgba(0,0,0,0.5)' // Добавим тень для красоты
+                display: 'block', 
+                boxShadow: '0 4px 20px rgba(0,0,0,0.5)' 
               }} 
             />
           )}

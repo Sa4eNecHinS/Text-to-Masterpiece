@@ -1,3 +1,4 @@
+// generation
 export type GenerateResponse = { image_url: string }
 
 export async function generateImage(prompt: string): Promise<string> {
@@ -12,18 +13,15 @@ export async function generateImage(prompt: string): Promise<string> {
   return data.image_url
 }
 
+
+
+// registration
 export type RegisterRequest = {
   user_id: string
   email: string
   password: string
 }
 
-/*
- *сделай сайт с таким же стилем, слева вместо flow shader напиши: "text to\nmasterpiece", т.е masterpiece должен быть на новой строке (без символа \n). справа вместо текста хочу оставить только одну кнопку, которая будет ввести на сайт по определенному эндпоинту. Пиши используя: ts, tsx. Нужна строгая типизация, поэтому typescript
- * */
-
-
-// регистрация 
 export async function registerUser(data: RegisterRequest) {
   const resp = await fetch(
     'http://localhost:8000/auth/Text-to-Masterpiece/registrate',
@@ -43,8 +41,8 @@ export async function registerUser(data: RegisterRequest) {
 }
 
 
+// authorization
 export async function loginUser(user_id: string, password: string) {
-  // авторизация 
   const formData = new URLSearchParams()
   formData.append('username', user_id)
   formData.append('password', password)
