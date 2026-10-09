@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 
 [[package]]
@@ -65,6 +65,7 @@ dependencies = [
     { name = "bcrypt" },
     { name = "dotenv" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
     { name = "openai" },
     { name = "pyjwt" },
     { name = "pytest" },
@@ -78,6 +79,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.134.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "openai", specifier = ">=2.24.0" },
     { name = "pyjwt", specifier = ">=2.11.0" },
     { name = "pytest", specifier = ">=9.0.2" },

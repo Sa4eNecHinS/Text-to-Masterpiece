@@ -1,10 +1,5 @@
 import { useEffect, useRef } from 'react';
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  image?: string;
-}
+import type { Message } from '@/types/message';
 
 interface MessageListProps {
   messages: Message[];

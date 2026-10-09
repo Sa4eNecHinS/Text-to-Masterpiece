@@ -1,53 +1,29 @@
-import logging
-import os
+import logging, os
 from datetime import timedelta
 from typing import Annotated
-
-import jwt
-from dotenv import load_dotenv
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from backend.api.create_jwt import ALGORITHM, SECRET_KEY, create_access_token
-from backend.database.db_models import User
-from backend.database.db_queries import (
+from backend.api.dependencies import get_current_user
+from backend.core.config import COOKIE_SECURE, COOKIE_SAMESITE
+from backend.core.security import create_access_token, verify_password
+from backend.database.models import User
+from backend.database.queries import (
     add_user,
     get_guest_by_uuid,
     get_user_by_email,
-    get_user_by_id,
     merge_guest_requests_into_user,
 )
 from backend.database.dependencies import get_db
-from backend.database.hash import verify_password
-from backend.pydantic_classes.models import UserPublic, UserRegistration
+from backend.schemas import UserPublic, UserRegistration
 
-
-load_dotenv()
 
 logger = logging.getLogger("uvicorn.error")
 auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 domain = "/Text-to-Masterpiece"
-
 type db_session = Annotated[AsyncSession, Depends(get_db)]
-type AccessToken = Annotated[str | None, Cookie(alias="access_token")]
 type GuestId = Annotated[str | None, Cookie(alias="guest_id")]
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.lower() in {"1", "true", "yes", "on"}
-
-
-COOKIE_SECURE = _env_bool("COOKIE_SECURE", default=False)
-COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()
-if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
-    raise RuntimeError("COOKIE_SAMESITE must be one of: lax, strict, none")
-if COOKIE_SAMESITE == "none" and not COOKIE_SECURE:
-    raise RuntimeError("COOKIE_SAMESITE=none requires COOKIE_SECURE=true")
 
 
 def _token_expiry() -> timedelta:
@@ -83,49 +59,11 @@ def _clear_guest_cookie(response: Response) -> None:
     )
 
 
-async def _user_from_token(token: str | None, session: AsyncSession) -> User | None:
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = int(payload["sub"])
-    except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
-        return None
-    return await get_user_by_id(user_id=user_id, session=session)
-
-
-async def get_optional_current_user(
-    session: db_session,
-    access_token: AccessToken = None,
-) -> User | None:
-    return await _user_from_token(access_token, session)
-
-
-async def get_current_user(
-    session: db_session,
-    access_token: AccessToken = None,
-) -> User:
-    user = await _user_from_token(access_token, session)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-        )
-    return user
-
-
 async def authenticate_user(
-    email: str,
-    password: str,
-    session: AsyncSession,
+    email: str, password: str, session: AsyncSession
 ) -> User | None:
     user = await get_user_by_email(email=email, session=session)
-    if user is None:
-        return None
-    if not await verify_password(
-        plain_password=password,
-        hashed_password=user.password,
-    ):
+    if user is None or not await verify_password(password, user.password):
         return None
     return user
 
@@ -151,9 +89,7 @@ async def registrate(
                 session=session,
             )
 
-            guest = (
-                await get_guest_by_uuid(guest_uuid, session) if guest_uuid else None
-            )
+            guest = await get_guest_by_uuid(guest_uuid, session) if guest_uuid else None
             if guest is not None:
                 await merge_guest_requests_into_user(
                     guest_id=guest.id,

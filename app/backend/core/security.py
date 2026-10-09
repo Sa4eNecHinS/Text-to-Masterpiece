@@ -1,12 +1,11 @@
 import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import jwt
-from dotenv import load_dotenv
 
+from .config import load_environment
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+load_environment()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
@@ -25,3 +24,12 @@ def create_access_token(
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=20))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+import bcrypt
+
+async def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+async def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))

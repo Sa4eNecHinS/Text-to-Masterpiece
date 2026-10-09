@@ -10,3 +10,6 @@ __pycache__/
 *.ttf
 *.eot
 app/frontend/src/fonts/
+
+# Generated backend image files
+app/backend/images/

@@ -1,17 +1,12 @@
 import pytest
 import pytest_asyncio
 
-from database.db_queries import (
+from database.queries import (
     add_user,
     add_prompt_and_image,
-    update_user_email_and_password,
-    del_user,
 )
-from database.db_models import (
-    SessionLocal,
-    User,
-    UserRequest,
-)
+from database.models import User, UserRequest
+from database.session import SessionLocal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker

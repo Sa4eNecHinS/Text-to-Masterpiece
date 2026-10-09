@@ -11,7 +11,7 @@
     // path settings 
     "baseUrl": ".",
     "paths": {
-        "@/": ["src/*"]
+        "@/*": ["src/*"]
     },
 
     /* Bundler mode */

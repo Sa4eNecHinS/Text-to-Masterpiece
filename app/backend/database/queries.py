@@ -4,8 +4,8 @@ from uuid import UUID
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .db_models import Guest, User, UserRequest
-from .hash import hash_password
+from .models import Guest, User, UserRequest
+from backend.core.security import hash_password
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -31,7 +31,7 @@ async def get_guest_by_uuid(
 ) -> Guest | None:
     try:
         normalized_uuid = _as_uuid(guest_uuid)
-    except (TypeError, ValueError, AttributeError):
+    except TypeError, ValueError, AttributeError:
         return None
     result = await session.execute(
         select(Guest).where(Guest.guest_id == normalized_uuid)

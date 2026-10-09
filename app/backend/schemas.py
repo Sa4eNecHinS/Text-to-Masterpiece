@@ -1,8 +1,13 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StringConstraints
+from typing import Annotated
 
 
 class GenerateRequest(BaseModel):
-    prompt: str
+    prompt: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
+
+
+class GenerateResponse(BaseModel):
+    image_url: str
 
 
 class UserRegistration(BaseModel):

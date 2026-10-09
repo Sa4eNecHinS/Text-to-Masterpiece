@@ -1,25 +1,26 @@
 import { useState, useEffect } from "react";
-import { generateImage } from "@/services/requests";
+import { generateImage, startGuestSession } from "@/services/requests";
+import type { Message } from "@/types/message";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { MessageList } from "@/components/chat/MessageList";
 
 export default function GeneratePage() {
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
   const isChatMode = messages.length > 0;
 
   useEffect(() => {
-    fetch("http://localhost:8000/Text-to-Masterpiece", { credentials: "include" }).catch(console.error);
+    startGuestSession().catch(console.error);
   }, []);
 
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
     
-    const userMsg = { role: 'user', content: input };
+    const userMsg: Message = { role: 'user', content: input };
     setMessages(prev => [...prev, userMsg]);
     const currentPrompt = input;
     setInput(""); 
@@ -30,7 +31,8 @@ export default function GeneratePage() {
       setMessages(prev => [...prev, { role: 'assistant', content: 'Result:', image: imageUrl }]);
     } catch (err) {
       console.error(err);
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Error generating image.' }]);
+      const message = err instanceof Error ? err.message : 'Error generating image.';
+      setMessages(prev => [...prev, { role: 'assistant', content: message }]);
     } finally {
       setLoading(false);
     }
