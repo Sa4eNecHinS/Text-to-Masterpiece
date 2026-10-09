@@ -160,6 +160,19 @@ async def login(
     }
 
 
+@auth_router.post(f"{domain}/logout")
+async def logout(response: Response):
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        secure=COOKIE_SECURE,
+        httponly=True,
+        samesite=COOKIE_SAMESITE,
+    )
+    _clear_guest_cookie(response)
+    return {"message": "Logout successful"}
+
+
 @auth_router.get(f"{domain}/users/me", response_model=UserPublic)
 async def read_users_me(
     current_user: Annotated[User, Depends(get_current_user)],

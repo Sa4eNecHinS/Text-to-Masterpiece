@@ -50,7 +50,8 @@ export const MessageList = ({ messages, loading }: MessageListProps) => {
           )}
 
           {msg.image && (
-            <img 
+            <img
+              className="generated-image"
               src={msg.image} 
               alt="Generated" 
               style={{ 
