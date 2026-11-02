@@ -1,8 +1,20 @@
+# Python-generated files
 __pycache__/
-.env
-.python-version
-.pyc
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
 
+# Virtual environments
+.venv
+__pycache__/
+.env.*
+!.env.example
+.python-version
+
+# local images
+app/backend/images/
 
 # Шрифты
 *.otf
@@ -11,5 +23,3 @@ __pycache__/
 *.eot
 app/frontend/src/fonts/
 
-# Generated backend image files
-app/backend/images/

@@ -1,10 +1,8 @@
 import os
 
+from backend.core.config import load_environment
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-from . import models
-from backend.core.config import load_environment
 
 load_environment()
 
