@@ -5,18 +5,19 @@ interface ChatInputProps {
   onChange: (val: string) => void;
   onSend: () => void;
   loading?: boolean;
+  disabled?: boolean;
   placeholder?: string;
   isGlass?: boolean; 
 }
 
 export const ChatInput = ({ 
-  value, onChange, onSend, loading, placeholder = "Describe your thoughts...", isGlass = false 
+  value, onChange, onSend, loading, disabled, placeholder = "Describe your thoughts...", isGlass = false
 }: ChatInputProps) => {
   
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      onSend();
+      if (!loading && !disabled) onSend();
     }
   };
 
@@ -39,7 +40,7 @@ export const ChatInput = ({
       <button 
         className="send-btn" 
         onClick={onSend} 
-        disabled={!value.trim() || loading}
+        disabled={!value.trim() || loading || disabled}
       >
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M12 19V5M5 12L12 5L19 12" strokeLinecap="round" strokeLinejoin="round"/>

@@ -523,6 +523,53 @@ html, body, #root {
 .chat-restore-error { position: relative; z-index: 25; margin: 60px 24px 0; color: var(--muted); font-size: 12px; }
 
 
+.model-select {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  max-width: 700px;
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  color: var(--muted);
+  font-size: 11px;
+}
+.model-select select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+}
+.model-select button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.model-select select:focus-visible, .model-select button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.model-select select:disabled { opacity: 0.5; }
+.generation-model {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 /* =========== HERO CENTERING =========== */
 .hero-center-wrapper {
   position: absolute;
@@ -585,6 +632,9 @@ html, body, #root {
 .input-transition-wrapper {
   width: 100%;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   justify-content: center;
   transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }

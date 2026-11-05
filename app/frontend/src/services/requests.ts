@@ -1,11 +1,25 @@
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
-export type GenerateResponse = { image_url: string }
+export type ImageModel = { model_id: string; name: string }
+export type GenerateResponse = { image_url: string; model_id: string; model_name: string }
+
+export async function getModels(signal?: AbortSignal): Promise<ImageModel[]> {
+  const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/models`, { signal })
+  if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load models (HTTP ${response.status}).`)
+  const data: unknown = await response.json()
+  if (!Array.isArray(data) || !data.every(model => model && typeof model.model_id === 'string'
+    && model.model_id.trim() && typeof model.name === 'string' && model.name.trim())) {
+    throw new Error('The server returned an invalid model catalogue.')
+  }
+  return data as ImageModel[]
+}
 export type ChatHistoryEntry = {
   id: number
   prompt: string
   image_url: string
   created_at: string
+  model_id: string | null
+  model_name: string | null
 }
 
 export async function getChatHistory(offset = 0, signal?: AbortSignal): Promise<ChatHistoryEntry[]> {
@@ -37,13 +51,13 @@ async function responseDetail(resp: Response): Promise<string | undefined> {
   return undefined
 }
 
-export async function generateImage(prompt: string): Promise<string> {
+export async function generateImage(prompt: string, modelId: string): Promise<GenerateResponse> {
   await initializeSession()
   const resp = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/generate`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt })
+    body: JSON.stringify({ prompt, model_id: modelId })
   })
 
   if (!resp.ok) {
@@ -60,7 +74,11 @@ export async function generateImage(prompt: string): Promise<string> {
   if (!data || typeof data !== 'object' || !('image_url' in data) || typeof data.image_url !== 'string' || !data.image_url.trim()) {
     throw new Error('Image generation response did not contain a valid image_url')
   }
-  return data.image_url
+  if (!('model_id' in data) || typeof data.model_id !== 'string'
+    || !('model_name' in data) || typeof data.model_name !== 'string') {
+    throw new Error('Image generation response did not contain valid model details')
+  }
+  return data as GenerateResponse
 }
 
 export type User = { id: number; email: string }

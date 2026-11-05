@@ -4,6 +4,17 @@ import binascii
 import httpx
 
 
+# Safety allowlist, not a catalogue: names and availability come from PostgreSQL.
+SUPPORTED_MODELS = {
+    "cloudflare/flux-1-schnell": "@cf/black-forest-labs/flux-1-schnell",
+    "cloudflare/flux-2-klein-4b": "@cf/black-forest-labs/flux-2-klein-4b",
+}
+
+
+def is_supported_model(model_id: str, provider: str, provider_model_id: str) -> bool:
+    return provider == "cloudflare" and SUPPORTED_MODELS.get(model_id) == provider_model_id
+
+
 class ImageGenerationError(Exception):
     def __init__(
         self,
@@ -36,16 +47,26 @@ def _provider_codes(payload: object) -> tuple[int, ...]:
     )
 
 
+def _request_options(prompt: str, model: str) -> dict:
+    if model == SUPPORTED_MODELS["cloudflare/flux-1-schnell"]:
+        return {"json": {"prompt": prompt, "steps": 4}}
+    if model == SUPPORTED_MODELS["cloudflare/flux-2-klein-4b"]:
+        # files forces multipart even for text-only inputs; httpx supplies boundary.
+        return {"files": {"prompt": (None, prompt)}}
+    raise ImageGenerationError("Unsupported image generation model.")
+
+
 async def generate_image(
     prompt: str, account_id: str, api_token: str, model: str
 ) -> bytes:
+    options = _request_options(prompt, model)
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
             response = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {api_token}"},
-                json={"prompt": prompt, "steps": 4},
+                **options,
             )
     except httpx.TimeoutException as error:
         raise ImageGenerationError(

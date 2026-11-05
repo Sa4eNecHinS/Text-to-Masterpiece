@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { generateImage, initializeSession, type ChatHistoryEntry } from "@/services/requests";
+import { generateImage, getModels, initializeSession, type ChatHistoryEntry, type ImageModel } from "@/services/requests";
 import { useAuth } from "@/components/auth/authContext";
 import { useChatHistory } from "@/components/chat/useChatHistory";
 import { readCurrentChat, saveCurrentChat } from "@/utils/currentChat";
@@ -7,6 +7,7 @@ import type { Message } from "@/types/message";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { MessageList } from "@/components/chat/MessageList";
+import { ModelSelect } from "@/components/chat/ModelSelect";
 
 export default function GeneratePage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -15,10 +16,41 @@ export default function GeneratePage() {
   const [ready, setReady] = useState(false);
   const [restoreError, setRestoreError] = useState('');
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [models, setModels] = useState<ImageModel[]>([]);
+  const [modelId, setModelId] = useState('');
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState('');
+  const [modelsRevision, setModelsRevision] = useState(0);
   const owner = useRef<number | null>(null);
   const sending = useRef(false);
   const { user } = useAuth();
   const history = useChatHistory();
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const load = async () => {
+      setModelsLoading(true);
+      setModelsError('');
+      try {
+        const catalogue = await getModels(controller.signal);
+        if (controller.signal.aborted) return;
+        setModels(catalogue);
+        setModelId(previous => catalogue.some(model => model.model_id === previous) ? previous
+          : (catalogue.find(model => model.model_id === 'cloudflare/flux-1-schnell') ?? catalogue[0])?.model_id ?? '');
+      } catch (error) {
+        if (!controller.signal.aborted) setModelsError(error instanceof Error ? error.message : 'Unable to load models.');
+      } finally {
+        if (!controller.signal.aborted) setModelsLoading(false);
+      }
+    };
+    void load();
+    return () => controller.abort();
+  }, [modelsRevision]);
+
+  const validModel = !modelsLoading && !modelsError && models.some(model => model.model_id === modelId);
+  const modelSelector = <ModelSelect models={models} value={modelId} loading={modelsLoading}
+    error={modelsError} disabled={loading} onChange={setModelId}
+    onRetry={() => setModelsRevision(value => value + 1)} />;
 
   useEffect(() => {
     if (ready) return;
@@ -52,7 +84,7 @@ export default function GeneratePage() {
     if (sending.current || !ready) return;
     setMessages([
       { role: 'user', content: entry.prompt },
-      { role: 'assistant', content: 'Result:', image: entry.image_url },
+      { role: 'assistant', content: 'Result:', image: entry.image_url, modelName: entry.model_name },
     ]);
     setInput('');
     setSelectedId(entry.id);
@@ -65,7 +97,7 @@ export default function GeneratePage() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || sending.current || !ready) return;
+    if (!input.trim() || sending.current || !ready || !validModel) return;
     sending.current = true;
     
     const userMsg: Message = { role: 'user', content: input };
@@ -75,8 +107,8 @@ export default function GeneratePage() {
     setLoading(true);
 
     try {
-      const imageUrl = await generateImage(currentPrompt);
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Result:', image: imageUrl }]);
+      const result = await generateImage(currentPrompt, modelId);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Result:', image: result.image_url, modelName: result.model_name }]);
       history.refresh();
     } catch (err) {
       console.error(err);
@@ -108,11 +140,13 @@ export default function GeneratePage() {
           
           {!isChatMode && (
             <div className="input-transition-wrapper centered">
+              {modelSelector}
               <ChatInput 
                 value={input} 
                 onChange={setInput} 
                 onSend={handleSend} 
                 loading={loading || !ready}
+                disabled={!validModel}
                 placeholder="Describe your vision..."
                 isGlass={true} 
               />
@@ -123,18 +157,20 @@ export default function GeneratePage() {
 
       {/* messages list */}
       {isChatMode && (
-        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '120px', paddingTop: '20px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '180px', paddingTop: '20px' }}>
            <MessageList messages={messages} loading={loading} />
         </div>
       )}
 
       {isChatMode && (
         <div className="input-transition-wrapper bottom">
+          {modelSelector}
           <ChatInput 
             value={input} 
             onChange={setInput} 
             onSend={handleSend} 
             loading={loading || !ready}
+            disabled={!validModel}
             placeholder="Continue..."
             isGlass={true}
           />

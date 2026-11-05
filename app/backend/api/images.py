@@ -9,11 +9,17 @@ from backend.database.queries import (
     add_prompt_and_image,
     get_guest_by_uuid,
     get_guest_chat_history,
+    get_model_by_id,
+    get_models,
     get_user_chat_history,
 )
-from backend.core.config import IMAGE_STORAGE_PATH, cloudflare_credentials, settings
-from backend.schemas import GenerateRequest, GenerateResponse
-from backend.services.image_generation import ImageGenerationError, generate_image
+from backend.core.config import IMAGE_STORAGE_PATH, cloudflare_credentials
+from backend.schemas import ChatHistoryEntry, GenerateRequest, GenerateResponse, ModelPublic
+from backend.services.image_generation import (
+    ImageGenerationError,
+    generate_image,
+    is_supported_model,
+)
 from backend.services.image_storage import delete_image, save_image
 
 router = APIRouter()
@@ -24,7 +30,16 @@ type GuestId = Annotated[str | None, Cookie(alias="guest_id")]
 logger = logging.getLogger("uvicorn.error")
 
 
-@router.get(f"{domain}/chat_history")
+@router.get(f"{domain}/models", response_model=list[ModelPublic])
+async def models(db: DbSession):
+    return [
+        model
+        for model in await get_models(db)
+        if is_supported_model(model.model_id, model.provider, model.provider_model_id)
+    ]
+
+
+@router.get(f"{domain}/chat_history", response_model=list[ChatHistoryEntry])
 async def chat_history(
     db: DbSession,
     current_user: OptionalUser,
@@ -53,13 +68,19 @@ async def generation(
     current_user: OptionalUser,
     guest_uuid: GuestId = None,
 ):
+    model = await get_model_by_id(data.model_id, db)
+    if model is None:
+        raise HTTPException(status_code=400, detail="Unknown image generation model.")
+    if not is_supported_model(model.model_id, model.provider, model.provider_model_id):
+        raise HTTPException(status_code=400, detail="Unsupported image generation model.")
+
     try:
         account_id, api_token = cloudflare_credentials()
         image = await generate_image(
             prompt=data.prompt,
             account_id=account_id,
             api_token=api_token,
-            model=settings.IMAGE_MODEL,
+            model=model.provider_model_id,
         )
     except (ImageGenerationError, RuntimeError) as error:
         detail = str(error) if isinstance(error, RuntimeError) else str(error)
@@ -80,12 +101,17 @@ async def generation(
                 user_id=current_user.id,
                 prompt=data.prompt,
                 image_url=image_url,
+                model_id=model.model_id,
                 session=db,
             )
         else:
             guest = await get_or_create_guest(guest_uuid, response, db)
             await add_prompt_and_image(
-                guest_id=guest.id, prompt=data.prompt, image_url=image_url, session=db
+                guest_id=guest.id,
+                prompt=data.prompt,
+                image_url=image_url,
+                model_id=model.model_id,
+                session=db,
             )
         await db.commit()
     except Exception as error:
@@ -98,4 +124,6 @@ async def generation(
         raise HTTPException(
             status_code=500, detail="Failed to save generated image"
         ) from error
-    return GenerateResponse(image_url=image_url)
+    return GenerateResponse(
+        image_url=image_url, model_id=model.model_id, model_name=model.name
+    )

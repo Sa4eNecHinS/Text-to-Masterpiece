@@ -1,0 +1,89 @@
+"""Isolated ORM/API tests: SQLite stands in for PostgreSQL; no real API calls."""
+import os
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+# Set before app imports; never use credentials or a database from the local .env.
+os.environ.update(
+    SECRET_KEY="test-only-secret-key-at-least-32-bytes", ALGORITHM="HS256",
+    COOKIE_SECURE="false", COOKIE_SAMESITE="lax", ACCESS_TOKEN_EXPIRE_MINUTES="20",
+    DB_DRIVER="postgresql+asyncpg", DB_USER="test", DB_PASS="test",
+    DB_HOST="127.0.0.1", DB_PORT="5432", DB_NAME="test",
+    CLOUDFLARE_ACCOUNT_ID="test-account", CLOUDFLARE_API_TOKEN="test-token",
+)
+
+import httpx
+import pytest
+import pytest_asyncio
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from backend.api import images
+from backend.database.dependencies import get_db
+from backend.database.models import Base, Model
+from backend.main import app
+from backend.services import image_generation
+
+# Preserve the real class when the provider's client factory is mocked.
+AsyncClient = httpx.AsyncClient
+
+
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite://")
+    with engine.connect() as connection:
+        connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS tests")
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        Base.metadata.create_all(connection)
+        connection.commit()
+        with Session(connection, expire_on_commit=False) as session:
+            session.add_all([
+                Model(model_id="cloudflare/flux-1-schnell", name="FLUX.1-schnell",
+                      provider="cloudflare", provider_model_id="@cf/black-forest-labs/flux-1-schnell"),
+                Model(model_id="cloudflare/flux-2-klein-4b", name="FLUX-2-klein-4b",
+                      provider="cloudflare", provider_model_id="@cf/black-forest-labs/flux-2-klein-4b"),
+            ])
+            session.commit()
+
+            @asynccontextmanager
+            async def begin():
+                with session.begin():
+                    yield
+
+            yield SimpleNamespace(
+                add=session.add, execute=AsyncMock(side_effect=session.execute),
+                get=AsyncMock(side_effect=session.get), flush=AsyncMock(side_effect=session.flush),
+                commit=AsyncMock(side_effect=session.commit), rollback=AsyncMock(side_effect=session.rollback),
+                begin=begin, sync=session,
+            )
+    engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def client(db, tmp_path, monkeypatch):
+    async def override_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    monkeypatch.setattr(images, "IMAGE_STORAGE_PATH", tmp_path)
+    async with AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def provider(monkeypatch):
+    def install(handler):
+        requests = []
+
+        def tracked(request):
+            requests.append(request)
+            return handler(request)
+
+        monkeypatch.setattr(image_generation.httpx, "AsyncClient", lambda **kwargs: AsyncClient(
+            transport=httpx.MockTransport(tracked), **kwargs
+        ))
+        return requests
+
+    return install

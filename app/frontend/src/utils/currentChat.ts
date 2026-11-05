@@ -15,7 +15,8 @@ export function readCurrentChat(owner: number | null): CurrentChat | null {
     if (!data || data.owner !== owner || typeof data.input !== 'string'
       || !(data.selectedId === null || typeof data.selectedId === 'number') || !Array.isArray(data.messages)
       || !data.messages.every((message: Message) => message && (message.role === 'user' || message.role === 'assistant')
-        && typeof message.content === 'string' && (message.image === undefined || typeof message.image === 'string'))) return null
+        && typeof message.content === 'string' && (message.image === undefined || typeof message.image === 'string')
+        && (message.modelName == null || typeof message.modelName === 'string'))) return null
     return data
   } catch { return null }
 }

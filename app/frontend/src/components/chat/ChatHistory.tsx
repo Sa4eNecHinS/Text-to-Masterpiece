@@ -21,6 +21,7 @@ export const ChatHistory = ({ entries, selectedId, loading, error, hasMore, disa
           title={entry.prompt} aria-current={selectedId === entry.id ? 'true' : undefined}
           disabled={disabled} onClick={() => onSelect(entry)}>
           {entry.prompt}
+          <small className="generation-model">{entry.model_name || 'Модель неизвестна'}</small>
         </button>
       ))}
       {loading && <p className="chat-history-status" role="status">Loading history…</p>}

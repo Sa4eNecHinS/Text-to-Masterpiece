@@ -49,6 +49,7 @@ export const MessageList = ({ messages, loading }: MessageListProps) => {
             </div>
           )}
 
+          {msg.image && <small className="generation-model">{msg.modelName || 'Модель неизвестна'}</small>}
           {msg.image && (
             <img
               className="generated-image"

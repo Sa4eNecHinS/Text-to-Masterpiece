@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import Guest, User, UserRequest
+from .models import Guest, Model, User, UserRequest
 from backend.core.security import hash_password
 
 
@@ -59,6 +59,15 @@ async def get_user_by_id(user_id: int, session: AsyncSession) -> User | None:
     return await session.get(User, user_id)
 
 
+async def get_models(session: AsyncSession) -> list[Model]:
+    result = await session.execute(select(Model).order_by(Model.model_id))
+    return list(result.scalars())
+
+
+async def get_model_by_id(model_id: str, session: AsyncSession) -> Model | None:
+    return await session.get(Model, model_id)
+
+
 async def add_prompt_and_image(
     *,
     prompt: str,
@@ -66,6 +75,7 @@ async def add_prompt_and_image(
     session: AsyncSession,
     user_id: int | None = None,
     guest_id: int | None = None,
+    model_id: str | None = None,
 ) -> UserRequest:
     if (user_id is None) == (guest_id is None):
         raise ValueError("Exactly one of user_id or guest_id must be supplied")
@@ -75,6 +85,7 @@ async def add_prompt_and_image(
         guest_id=guest_id,
         prompt=prompt,
         image_url=image_url,
+        model_id=model_id,
     )
     session.add(request)
     try:
@@ -85,12 +96,14 @@ async def add_prompt_and_image(
     return request
 
 
-def _history_row(request: UserRequest) -> dict:
+def _history_row(request: UserRequest, model_name: str | None) -> dict:
     return {
         "id": request.id,
         "prompt": request.prompt,
         "image_url": request.image_url,
         "created_at": request.created_at,
+        "model_id": request.model_id,
+        "model_name": model_name,
     }
 
 
@@ -102,13 +115,14 @@ async def get_user_chat_history(
     offset: int = 0,
 ) -> list[dict]:
     result = await session.execute(
-        select(UserRequest)
+        select(UserRequest, Model.name)
+        .outerjoin(Model, UserRequest.model_id == Model.model_id)
         .where(UserRequest.user_id == user_id)
         .order_by(UserRequest.created_at.desc())
         .limit(limit)
         .offset(offset)
     )
-    return [_history_row(request) for request in result.scalars()]
+    return [_history_row(request, name) for request, name in result]
 
 
 async def get_guest_chat_history(
@@ -119,13 +133,14 @@ async def get_guest_chat_history(
     offset: int = 0,
 ) -> list[dict]:
     result = await session.execute(
-        select(UserRequest)
+        select(UserRequest, Model.name)
+        .outerjoin(Model, UserRequest.model_id == Model.model_id)
         .where(UserRequest.guest_id == guest_id)
         .order_by(UserRequest.created_at.desc())
         .limit(limit)
         .offset(offset)
     )
-    return [_history_row(request) for request in result.scalars()]
+    return [_history_row(request, name) for request, name in result]
 
 
 async def merge_guest_requests_into_user(

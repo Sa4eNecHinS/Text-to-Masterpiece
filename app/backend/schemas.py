@@ -1,13 +1,34 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from typing import Annotated
 
 
 class GenerateRequest(BaseModel):
     prompt: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
+    model_id: Annotated[str, StringConstraints(min_length=1, max_length=200)] = "cloudflare/flux-1-schnell"
+
+
+class ModelPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    model_id: str
+    name: str
 
 
 class GenerateResponse(BaseModel):
     image_url: str
+    model_id: str
+    model_name: str
+
+
+class ChatHistoryEntry(BaseModel):
+    id: int
+    prompt: str
+    image_url: str
+    created_at: datetime
+    model_id: str | None
+    model_name: str | None
 
 
 class UserRegistration(BaseModel):
