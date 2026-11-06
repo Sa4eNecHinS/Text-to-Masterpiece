@@ -1,12 +1,11 @@
 import logging
 from uuid import UUID
 
+from backend.core.security import hash_password
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Guest, Model, User, UserRequest
-from backend.core.security import hash_password
-
 
 logger = logging.getLogger("uvicorn.error")
 

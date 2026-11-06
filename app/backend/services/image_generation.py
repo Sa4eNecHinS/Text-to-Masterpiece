@@ -4,15 +4,14 @@ import binascii
 import httpx
 
 
-# Safety allowlist, not a catalogue: names and availability come from PostgreSQL.
-SUPPORTED_MODELS = {
-    "cloudflare/flux-1-schnell": "@cf/black-forest-labs/flux-1-schnell",
-    "cloudflare/flux-2-klein-4b": "@cf/black-forest-labs/flux-2-klein-4b",
-}
-
-
 def is_supported_model(model_id: str, provider: str, provider_model_id: str) -> bool:
-    return provider == "cloudflare" and SUPPORTED_MODELS.get(model_id) == provider_model_id
+    if provider != "cloudflare":
+        return False
+    if model_id == "cloudflare/flux-1-schnell":
+        return provider_model_id == "@cf/black-forest-labs/flux-1-schnell"
+    if model_id == "cloudflare/flux-2-klein-4b":
+        return provider_model_id == "@cf/black-forest-labs/flux-2-klein-4b"
+    return False
 
 
 class ImageGenerationError(Exception):
@@ -48,9 +47,9 @@ def _provider_codes(payload: object) -> tuple[int, ...]:
 
 
 def _request_options(prompt: str, model: str) -> dict:
-    if model == SUPPORTED_MODELS["cloudflare/flux-1-schnell"]:
+    if model == "@cf/black-forest-labs/flux-1-schnell":
         return {"json": {"prompt": prompt, "steps": 4}}
-    if model == SUPPORTED_MODELS["cloudflare/flux-2-klein-4b"]:
+    if model == "@cf/black-forest-labs/flux-2-klein-4b":
         # files forces multipart even for text-only inputs; httpx supplies boundary.
         return {"files": {"prompt": (None, prompt)}}
     raise ImageGenerationError("Unsupported image generation model.")

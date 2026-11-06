@@ -1,8 +1,8 @@
 import logging
 from typing import Annotated
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
-from sqlalchemy.ext.asyncio import AsyncSession
+
 from backend.api.dependencies import get_optional_current_user, get_or_create_guest
+from backend.core.config import IMAGE_STORAGE_PATH, cloudflare_credentials
 from backend.database.dependencies import get_db
 from backend.database.models import User
 from backend.database.queries import (
@@ -13,14 +13,20 @@ from backend.database.queries import (
     get_models,
     get_user_chat_history,
 )
-from backend.core.config import IMAGE_STORAGE_PATH, cloudflare_credentials
-from backend.schemas import ChatHistoryEntry, GenerateRequest, GenerateResponse, ModelPublic
+from backend.schemas import (
+    ChatHistoryEntry,
+    GenerateRequest,
+    GenerateResponse,
+    ModelPublic,
+)
 from backend.services.image_generation import (
     ImageGenerationError,
     generate_image,
     is_supported_model,
 )
 from backend.services.image_storage import delete_image, save_image
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 domain = "/Text-to-Masterpiece"
@@ -72,7 +78,9 @@ async def generation(
     if model is None:
         raise HTTPException(status_code=400, detail="Unknown image generation model.")
     if not is_supported_model(model.model_id, model.provider, model.provider_model_id):
-        raise HTTPException(status_code=400, detail="Unsupported image generation model.")
+        raise HTTPException(
+            status_code=400, detail="Unsupported image generation model."
+        )
 
     try:
         account_id, api_token = cloudflare_credentials()
@@ -83,7 +91,7 @@ async def generation(
             model=model.provider_model_id,
         )
     except (ImageGenerationError, RuntimeError) as error:
-        detail = str(error) if isinstance(error, RuntimeError) else str(error)
+        detail = str(error)
         raise HTTPException(status_code=502, detail=detail) from error
 
     try:
