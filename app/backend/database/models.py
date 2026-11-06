@@ -1,7 +1,21 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Identity, Index, Integer, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -33,6 +47,65 @@ class Model(Base):
     provider_model_id: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class AIDailyUsage(Base):
+    __tablename__ = "ai_daily_usage"
+    __table_args__ = (
+        CheckConstraint(
+            "used_neurons >= 0",
+            name="ck_ai_daily_usage_non_negative",
+        ),
+        {"schema": "tests"},
+    )
+
+    usage_date: Mapped[date] = mapped_column(
+        Date,
+        primary_key=True,
+    )
+
+    used_neurons: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+        server_default=text("0"),
+    )
+
+
+class RateLimitBucket(Base):
+    __tablename__ = "rate_limit_buckets"
+
+    __table_args__ = (
+        CheckConstraint(
+            "tokens >= 0",
+            name="ck_rate_limit_buckets_tokens_non_negative",
+        ),
+        CheckConstraint(
+            "scope IN ('user', 'guest', 'ip')",
+            name="ck_rate_limit_buckets_scope",
+        ),
+        {"schema": "tests"},
+    )
+
+    scope: Mapped[str] = mapped_column(
+        String(16),
+        primary_key=True,
+    )
+
+    subject_key: Mapped[str] = mapped_column(
+        String(128),
+        primary_key=True,
+    )
+
+    tokens: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = {"schema": "tests"}
@@ -47,7 +120,13 @@ class User(Base):
 
 class UserRequest(Base):
     __tablename__ = "users_requests"
-    __table_args__ = {"schema": "tests"}
+    __table_args__ = (
+        CheckConstraint(
+            "char_length(prompt) <= 2000",
+            name="ck_users_requests_prompt_length",
+        ),
+        {"schema": "tests"},
+    )
 
     id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
     user_id: Mapped[int | None] = mapped_column(

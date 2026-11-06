@@ -1,10 +1,22 @@
 import logging
 from typing import Annotated
 
-from backend.api.dependencies import get_optional_current_user, get_or_create_guest
-from backend.core.config import IMAGE_STORAGE_PATH, cloudflare_credentials
+from backend.api.dependencies import (
+    check_generation_rate_limit,
+    get_optional_current_user,
+    get_or_create_guest,
+)
+from backend.core.config import (
+    IMAGE_STORAGE_PATH,
+    ModelCostConfigurationError,
+    cloudflare_credentials,
+    neuron_cost,
+    settings,
+)
+from backend.database.ai_usage import DailyBudgetExceeded
 from backend.database.dependencies import get_db
 from backend.database.models import User
+from backend.database.rate_limiting import RateLimitExceeded
 from backend.database.queries import (
     add_prompt_and_image,
     get_guest_by_uuid,
@@ -19,6 +31,7 @@ from backend.schemas import (
     GenerateResponse,
     ModelPublic,
 )
+from backend.services.ai_budget import reserve_generation_neurons
 from backend.services.image_generation import (
     ImageGenerationError,
     generate_image,
@@ -26,6 +39,7 @@ from backend.services.image_generation import (
 )
 from backend.services.image_storage import delete_image, save_image
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
@@ -83,7 +97,57 @@ async def generation(
         )
 
     try:
+        cost = neuron_cost(model.model_id)
+    except ModelCostConfigurationError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+    try:
         account_id, api_token = cloudflare_credentials()
+    except RuntimeError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    if request.client is None:
+        raise HTTPException(status_code=503, detail="Unable to determine client IP.")
+    try:
+        guest_uuid = await check_generation_rate_limit(
+            request.client.host,
+            current_user.id if current_user is not None else None,
+            guest_uuid,
+            response,
+        )
+    except RateLimitExceeded as error:
+        raise HTTPException(
+            status_code=429, detail=str(error),
+            headers={"Retry-After": str(error.retry_after)},
+        ) from error
+    except SQLAlchemyError as error:
+        logger.exception("Failed to check generation rate limit")
+        raise HTTPException(
+            status_code=503, detail="Generation rate limiter is unavailable."
+        ) from error
+
+    # Keep a newly committed guest identity even on downstream errors. Otherwise
+    # failed generations could start a fresh guest bucket on each attempt.
+    error_headers = (
+        {"Set-Cookie": response.headers["set-cookie"]}
+        if "set-cookie" in response.headers else None
+    )
+    try:
+        await reserve_generation_neurons(cost, settings.AI_DAILY_NEURON_LIMIT)
+    except DailyBudgetExceeded as error:
+        raise HTTPException(
+            status_code=429, detail="Daily AI generation limit reached.",
+            headers=error_headers,
+        ) from error
+    except SQLAlchemyError as error:
+        logger.exception("Failed to reserve daily AI budget")
+        raise HTTPException(
+            status_code=503, detail="AI budget reservation is unavailable.",
+            headers=error_headers,
+        ) from error
+
+    # No automatic retries: each future provider attempt must reserve anew.
+    try:
         image = await generate_image(
             prompt=data.prompt,
             account_id=account_id,
@@ -92,14 +156,14 @@ async def generation(
         )
     except (ImageGenerationError, RuntimeError) as error:
         detail = str(error)
-        raise HTTPException(status_code=502, detail=detail) from error
+        raise HTTPException(status_code=502, detail=detail, headers=error_headers) from error
 
     try:
         image_path = await save_image(image, IMAGE_STORAGE_PATH)
     except OSError as error:
         logger.exception("Failed to store generated image")
         raise HTTPException(
-            status_code=500, detail="Failed to store generated image"
+            status_code=500, detail="Failed to store generated image", headers=error_headers
         ) from error
 
     image_url = str(request.url_for("images", path=image_path.name))
@@ -130,7 +194,7 @@ async def generation(
             logger.exception("Failed to remove image after database failure")
         logger.exception("Failed to persist generation")
         raise HTTPException(
-            status_code=500, detail="Failed to save generated image"
+            status_code=500, detail="Failed to save generated image", headers=error_headers
         ) from error
     return GenerateResponse(
         image_url=image_url, model_id=model.model_id, model_name=model.name

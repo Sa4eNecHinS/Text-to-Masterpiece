@@ -9,7 +9,7 @@ wheels/
 # Virtual environments
 .venv
 __pycache__/
-.env.*
+.env
 !.env.example
 .python-version
 

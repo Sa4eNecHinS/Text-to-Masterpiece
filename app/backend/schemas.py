@@ -5,8 +5,12 @@ from typing import Annotated
 
 
 class GenerateRequest(BaseModel):
-    prompt: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
-    model_id: Annotated[str, StringConstraints(min_length=1, max_length=200)] = "cloudflare/flux-1-schnell"
+    prompt: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
+    ]
+    model_id: Annotated[str, StringConstraints(min_length=1, max_length=200)] = (
+        "cloudflare/flux-1-schnell"
+    )
 
 
 class ModelPublic(BaseModel):

@@ -1,5 +1,9 @@
 """Isolated ORM/API tests: SQLite stands in for PostgreSQL; no real API calls."""
 import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,12 +15,17 @@ os.environ.update(
     DB_DRIVER="postgresql+asyncpg", DB_USER="test", DB_PASS="test",
     DB_HOST="127.0.0.1", DB_PORT="5432", DB_NAME="test",
     CLOUDFLARE_ACCOUNT_ID="test-account", CLOUDFLARE_API_TOKEN="test-token",
+    AI_DAILY_NEURON_LIMIT="9000", AI_NEURON_COST_FLUX_1_SCHNELL="65",
+    AI_NEURON_COST_FLUX_2_KLEIN_4B="110",
+    RATE_LIMIT_USER_CAPACITY="1", RATE_LIMIT_USER_REFILL_SECONDS="15",
+    RATE_LIMIT_IP_CAPACITY="5", RATE_LIMIT_IP_REFILL_PER_MINUTE="45",
 )
 
 import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 
 from backend.api import images
@@ -33,6 +42,7 @@ AsyncClient = httpx.AsyncClient
 def db():
     engine = create_engine("sqlite://")
     with engine.connect() as connection:
+        connection.connection.create_function("char_length", 1, len)
         connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS tests")
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")
         Base.metadata.create_all(connection)
@@ -67,6 +77,12 @@ async def client(db, tmp_path, monkeypatch):
 
     app.dependency_overrides[get_db] = override_db
     monkeypatch.setattr(images, "IMAGE_STORAGE_PATH", tmp_path)
+    # Existing SQLite tests isolate the reservation boundary. PostgreSQL tests
+    # replace this with the real implementation against a disposable schema.
+    monkeypatch.setattr(images, "reserve_generation_neurons", AsyncMock())
+    monkeypatch.setattr(images, "check_generation_rate_limit", AsyncMock(
+        side_effect=lambda ip_address, user_id, guest_uuid, response: guest_uuid
+    ))
     async with AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield client
     app.dependency_overrides.clear()
@@ -87,3 +103,28 @@ def provider(monkeypatch):
         return requests
 
     return install
+
+
+@pytest.fixture(scope="session")
+def budget_postgres_url():
+    """Shared disposable PostgreSQL cluster; never use application DB settings."""
+    explicit = os.getenv("TEST_AI_DATABASE_URL")
+    if explicit:
+        yield explicit
+        return
+    if os.geteuid() == 0 or not all(shutil.which(cmd) for cmd in ("initdb", "pg_ctl")):
+        pytest.skip("Install PostgreSQL binaries or set TEST_AI_DATABASE_URL for isolated schema tests")
+
+    with tempfile.TemporaryDirectory(prefix="t2m-pg-") as directory:
+        root = Path(directory)
+        data = root / "data"
+        def run(*args):
+            return subprocess.run(args, check=True, capture_output=True, text=True, timeout=60)
+        run("initdb", "-D", str(data), "-U", "t2m_test", "--auth=trust", "--no-locale", "--encoding=UTF8")
+        run("pg_ctl", "-D", str(data), "-l", str(root / "server.log"), "-w", "start",
+            "-o", f"-F -h '' -k {root} -p 5432")
+        try:
+            yield URL.create("postgresql+asyncpg", username="t2m_test", database="postgres",
+                             query={"host": str(root), "port": "5432"})
+        finally:
+            run("pg_ctl", "-D", str(data), "-m", "immediate", "-w", "stop")
