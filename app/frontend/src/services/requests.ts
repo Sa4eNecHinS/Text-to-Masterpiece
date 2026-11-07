@@ -62,6 +62,12 @@ export async function generateImage(prompt: string, modelId: string): Promise<Ge
 
   if (!resp.ok) {
     const detail = await responseDetail(resp)
+    if (resp.status === 409) {
+      throw new Error(`${detail || 'Image generation is already in progress.'} Please wait for it to finish; it may be running in another tab.`)
+    }
+    if (resp.status === 503) {
+      throw new Error(detail || 'Server is busy. Please try again later.')
+    }
     throw new Error(detail || `Image generation failed (HTTP ${resp.status})`)
   }
 

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     IMAGE_MODEL: str = "@cf/black-forest-labs/flux-1-schnell"
     IMAGE_STORAGE_DIR: str = "images"
 
+    # Global slot numbers use PostgreSQL's two-int32 advisory-lock API.
+    AI_MAX_CONCURRENT_GENERATIONS: Annotated[int, Field(gt=0, le=2**31 - 1)] = 5
     AI_DAILY_NEURON_LIMIT: NeuronAmount
     AI_NEURON_COST_FLUX_1_SCHNELL: NeuronAmount
     AI_NEURON_COST_FLUX_2_KLEIN_4B: NeuronAmount

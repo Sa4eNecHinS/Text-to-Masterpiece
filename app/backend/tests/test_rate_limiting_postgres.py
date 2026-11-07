@@ -280,11 +280,12 @@ async def test_failed_commit_blocks_budget_and_provider(client, real_rate, provi
     requests = provider(lambda request: pytest.fail("Must not call provider"))
     response = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})
     assert response.status_code == 503
-    assert not requests and "set-cookie" not in response.headers
+    # Owner identity was committed before entering the failing rate transaction.
+    assert not requests and "set-cookie" in response.headers
     assert await bucket_rows(real_rate) == []
     images.reserve_generation_neurons.assert_not_awaited()
     async with real_rate.factory() as session:
-        assert not list(await session.scalars(select(Guest)))
+        assert len(list(await session.scalars(select(Guest)))) == 1
 
 
 @pytest.mark.asyncio

@@ -162,14 +162,21 @@ async def test_provider_failure_has_no_history(client, db, tmp_path, provider, m
     if failure == "http":
         assert "HTTP 429" in response.json()["detail"] and "1234" in response.json()["detail"]
     assert not list(db.sync.scalars(select(UserRequest)))
-    assert not list(db.sync.scalars(select(Guest)))
+    # A verified guest identity is now committed before locking/rate limiting.
+    assert len(list(db.sync.scalars(select(Guest)))) == 1
+    assert client.cookies.get("guest_id")
     assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.asyncio
 async def test_database_failure_removes_image(client, db, provider, tmp_path, monkeypatch):
     provider(lambda request: httpx.Response(200, json=PAYLOAD))
-    monkeypatch.setattr(db, "commit", AsyncMock(side_effect=RuntimeError("commit failed")))
+    async def commit():
+        if db.commit.await_count == 1:
+            db.sync.commit()  # Owner verification succeeds.
+        else:
+            raise RuntimeError("history commit failed")
+    monkeypatch.setattr(db, "commit", AsyncMock(side_effect=commit))
     response = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})
     assert response.status_code == 500
     db.rollback.assert_awaited_once()

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 
@@ -61,13 +62,16 @@ async def generate_image(
     options = _request_options(prompt, model)
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+        async with (
+            asyncio.timeout(60.0),
+            httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client,
+        ):
             response = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {api_token}"},
                 **options,
             )
-    except httpx.TimeoutException as error:
+    except (httpx.TimeoutException, TimeoutError) as error:
         raise ImageGenerationError(
             "Image generation timed out. Please try again."
         ) from error

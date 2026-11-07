@@ -69,7 +69,8 @@ async def test_reservation_failure_never_calls_provider(client, db, provider, tm
     assert not requests
     assert not list(tmp_path.iterdir())
     assert not list(db.sync.scalars(select(UserRequest)))
-    assert not list(db.sync.scalars(select(Guest)))
+    assert len(list(db.sync.scalars(select(Guest)))) == 1
+    assert client.cookies.get("guest_id")
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 from typing import Annotated
 
 from backend.api.dependencies import (
@@ -15,7 +16,14 @@ from backend.core.config import (
 )
 from backend.database.ai_usage import DailyBudgetExceeded
 from backend.database.dependencies import get_db
-from backend.database.models import User
+from backend.database.generation_lock import (
+    GenerationAlreadyInProgress,
+    GenerationCapacityExceeded,
+    GenerationLock,
+    GenerationLockUnavailable,
+    generation_lock,
+)
+from backend.database.models import Guest, Model, User
 from backend.database.rate_limiting import RateLimitExceeded
 from backend.database.queries import (
     add_prompt_and_image,
@@ -108,30 +116,88 @@ async def generation(
 
     if request.client is None:
         raise HTTPException(status_code=503, detail="Unable to determine client IP.")
+
+    # Resolve a verified owner before the lock or any token consumption. Stage
+    # a new guest cookie until its identity is committed. Also end the catalogue
+    # / authentication transaction before holding a pool connection for AI.
+    guest_response = Response()
     try:
-        guest_uuid = await check_generation_rate_limit(
+        guest = (
+            await get_or_create_guest(guest_uuid, guest_response, db)
+            if current_user is None else None
+        )
+        await db.commit()
+    except SQLAlchemyError as error:
+        await db.rollback()
+        logger.exception("Failed to resolve generation owner")
+        raise HTTPException(
+            status_code=503, detail="Generation owner verification is unavailable."
+        ) from error
+    response.raw_headers.extend(
+        (key, value) for key, value in guest_response.raw_headers if key == b"set-cookie"
+    )
+    error_headers = (
+        {"Set-Cookie": response.headers["set-cookie"]}
+        if "set-cookie" in response.headers else None
+    )
+    owner_type = "user" if current_user is not None else "guest"
+    owner_id = current_user.id if current_user is not None else guest.id
+    try:
+        async with generation_lock(owner_type, owner_id) as lock:
+            return await _generate_locked(
+                data, request, response, db, current_user, guest, model,
+                cost, account_id, api_token, error_headers, lock,
+            )
+    except GenerationAlreadyInProgress as error:
+        raise HTTPException(
+            status_code=409, detail="Image generation is already in progress.",
+            headers=error_headers,
+        ) from error
+    except GenerationCapacityExceeded as error:
+        raise HTTPException(
+            status_code=503, detail="Server is busy. Please try again later.",
+            headers=error_headers,
+        ) from error
+    except GenerationLockUnavailable as error:
+        logger.exception("Generation lock is unavailable")
+        raise HTTPException(
+            status_code=503, detail="Generation locking is unavailable.",
+            headers=error_headers,
+        ) from error
+
+
+async def _generate_locked(
+    data: GenerateRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession,
+    current_user: User | None,
+    guest: Guest | None,
+    model: Model,
+    cost: Decimal,
+    account_id: str,
+    api_token: str,
+    error_headers: dict[str, str] | None,
+    lock: GenerationLock,
+) -> GenerateResponse:
+    try:
+        await check_generation_rate_limit(
             request.client.host,
             current_user.id if current_user is not None else None,
-            guest_uuid,
+            str(guest.guest_id) if guest is not None else None,
             response,
         )
     except RateLimitExceeded as error:
         raise HTTPException(
             status_code=429, detail=str(error),
-            headers={"Retry-After": str(error.retry_after)},
+            headers={**(error_headers or {}), "Retry-After": str(error.retry_after)},
         ) from error
     except SQLAlchemyError as error:
         logger.exception("Failed to check generation rate limit")
         raise HTTPException(
-            status_code=503, detail="Generation rate limiter is unavailable."
+            status_code=503, detail="Generation rate limiter is unavailable.",
+            headers=error_headers,
         ) from error
-
-    # Keep a newly committed guest identity even on downstream errors. Otherwise
-    # failed generations could start a fresh guest bucket on each attempt.
-    error_headers = (
-        {"Set-Cookie": response.headers["set-cookie"]}
-        if "set-cookie" in response.headers else None
-    )
     try:
         await reserve_generation_neurons(cost, settings.AI_DAILY_NEURON_LIMIT)
     except DailyBudgetExceeded as error:
@@ -146,6 +212,8 @@ async def generation(
             headers=error_headers,
         ) from error
 
+    # Detect a lost lock session before starting the expensive HTTP operation.
+    await lock.check_connection()
     # No automatic retries: each future provider attempt must reserve anew.
     try:
         image = await generate_image(
@@ -177,7 +245,6 @@ async def generation(
                 session=db,
             )
         else:
-            guest = await get_or_create_guest(guest_uuid, response, db)
             await add_prompt_and_image(
                 guest_id=guest.id,
                 prompt=data.prompt,

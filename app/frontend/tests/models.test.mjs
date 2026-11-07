@@ -77,6 +77,23 @@ test('generation failure is shown, not converted to an image', async t => {
   await assert.rejects(api.generateImage('city', models[1].model_id), /Provider timed out/)
 })
 
+test('409 explains that generation may be running in another tab', async t => {
+  const api = await loadSource('services/requests.ts')
+  api.rememberSession({ id: 1, email: 'user@example.com' })
+  t.mock.method(globalThis, 'fetch', async () => json({ detail: 'Image generation is already in progress.' }, 409))
+  await assert.rejects(api.generateImage('city', models[0].model_id), /already in progress.*another tab/)
+})
+
+for (const detail of ['Server is busy. Please try again later.', undefined]) {
+  test(`503 shows a busy message without retrying (${detail ? 'detail' : 'fallback'})`, async t => {
+    const api = await loadSource('services/requests.ts')
+    api.rememberSession({ id: 1, email: 'user@example.com' })
+    const fetch = t.mock.method(globalThis, 'fetch', async () => json(detail ? { detail } : {}, 503))
+    await assert.rejects(api.generateImage('city', models[0].model_id), /Server is busy\. Please try again later\./)
+    assert.equal(fetch.mock.callCount(), 1)
+  })
+}
+
 test('history preserves model names and legacy nulls', async t => {
   const api = await loadSource('services/requests.ts')
   api.rememberSession({ id: 1, email: 'user@example.com' })

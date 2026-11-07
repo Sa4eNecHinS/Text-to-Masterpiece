@@ -16,7 +16,7 @@ os.environ.update(
     DB_HOST="127.0.0.1", DB_PORT="5432", DB_NAME="test",
     CLOUDFLARE_ACCOUNT_ID="test-account", CLOUDFLARE_API_TOKEN="test-token",
     AI_DAILY_NEURON_LIMIT="9000", AI_NEURON_COST_FLUX_1_SCHNELL="65",
-    AI_NEURON_COST_FLUX_2_KLEIN_4B="110",
+    AI_NEURON_COST_FLUX_2_KLEIN_4B="110", AI_MAX_CONCURRENT_GENERATIONS="5",
     RATE_LIMIT_USER_CAPACITY="1", RATE_LIMIT_USER_REFILL_SECONDS="15",
     RATE_LIMIT_IP_CAPACITY="5", RATE_LIMIT_IP_REFILL_PER_MINUTE="45",
 )
@@ -80,6 +80,14 @@ async def client(db, tmp_path, monkeypatch):
     # Existing SQLite tests isolate the reservation boundary. PostgreSQL tests
     # replace this with the real implementation against a disposable schema.
     monkeypatch.setattr(images, "reserve_generation_neurons", AsyncMock())
+
+    @asynccontextmanager
+    async def unlocked(*args, **kwargs):
+        yield SimpleNamespace(check_connection=AsyncMock())
+
+    # SQLite cannot implement PostgreSQL session locks. Dedicated unit and
+    # PostgreSQL integration tests exercise the actual lock component.
+    monkeypatch.setattr(images, "generation_lock", unlocked)
     monkeypatch.setattr(images, "check_generation_rate_limit", AsyncMock(
         side_effect=lambda ip_address, user_id, guest_uuid, response: guest_uuid
     ))
