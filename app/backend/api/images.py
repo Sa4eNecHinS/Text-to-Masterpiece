@@ -1,7 +1,7 @@
 import logging
 from decimal import Decimal
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from backend.api.dependencies import (
     check_generation_rate_limit,
@@ -9,7 +9,6 @@ from backend.api.dependencies import (
     get_or_create_guest,
 )
 from backend.core.config import (
-    IMAGE_STORAGE_PATH,
     ModelCostConfigurationError,
     cloudflare_credentials,
     neuron_cost,
@@ -36,7 +35,9 @@ from backend.database.queries import (
     get_model_by_id,
     get_models,
     get_owned_chat,
+    get_owned_generation,
     get_user_chat_history,
+    lock_guest_history,
     touch_chat,
 )
 from backend.schemas import (
@@ -52,9 +53,13 @@ from backend.services.image_generation import (
     generate_image,
     is_supported_model,
 )
-from backend.services.image_storage import delete_image, save_image
+from backend.services.image_storage import (
+    ImageStorage, StoredImage, StorageError, StorageNotFound,
+    finish_io, get_image_storage, image_format,
+)
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
-from sqlalchemy.exc import SQLAlchemyError
+from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
@@ -63,6 +68,75 @@ type DbSession = Annotated[AsyncSession, Depends(get_db)]
 type OptionalUser = Annotated[User | None, Depends(get_optional_current_user)]
 type GuestId = Annotated[str | None, Cookie(alias="guest_id")]
 logger = logging.getLogger("uvicorn.error")
+PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+
+
+def get_storage() -> ImageStorage:
+    # FastAPI executes sync dependencies in its thread pool (including SDK init).
+    try:
+        return get_image_storage()
+    except StorageError as error:
+        raise HTTPException(status_code=503, detail="Image storage is unavailable.") from error
+
+
+type Storage = Annotated[ImageStorage, Depends(get_storage)]
+
+
+class _ImageResponse(StreamingResponse):
+    def __init__(self, image: StoredImage):
+        self.image = image
+        headers = dict(PRIVATE_HEADERS)
+        if image.content_length is not None:
+            headers["Content-Length"] = str(image.content_length)
+        super().__init__(image.chunks(), media_type=image.content_type, headers=headers)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Also covers a disconnect before the iterator's first read.
+            try:
+                await finish_io(self.image.close())
+            except StorageError:
+                logger.error("Failed to close image download stream")
+
+
+async def owned_image_key(
+    generation_id: int, db: DbSession, current_user: OptionalUser,
+    guest_uuid: GuestId = None,
+) -> str:
+    guest = (
+        await get_guest_by_uuid(guest_uuid, db)
+        if current_user is None and guest_uuid else None
+    )
+    generation = None
+    if current_user is not None or guest is not None:
+        generation = await get_owned_generation(
+            generation_id, db,
+            user_id=current_user.id if current_user is not None else None,
+            guest_id=guest.id if guest is not None else None,
+        )
+    if generation is None:
+        raise HTTPException(status_code=404, detail="Image not found.", headers=PRIVATE_HEADERS)
+    key = generation.object_key
+    await db.commit()  # No DB transaction/connection is held during B2 streaming.
+    return key
+
+
+@router.get("/images/{generation_id}", response_class=StreamingResponse)
+async def private_image(
+    generation_id: int,
+    key: Annotated[str, Depends(owned_image_key)],
+    storage: Storage,
+):
+    try:
+        image = await storage.download(key)
+    except StorageNotFound as error:
+        raise HTTPException(status_code=404, detail="Image not found.", headers=PRIVATE_HEADERS) from error
+    except StorageError as error:
+        logger.error("Failed to read image generation_id=%s", generation_id)
+        raise HTTPException(status_code=503, detail="Image storage is unavailable.", headers=PRIVATE_HEADERS) from error
+    return _ImageResponse(image)
 
 
 @router.get(f"{domain}/models", response_model=list[ModelPublic])
@@ -140,6 +214,7 @@ async def generation(
     response: Response,
     db: DbSession,
     current_user: OptionalUser,
+    storage: Storage,
     guest_uuid: GuestId = None,
 ):
     model = await get_model_by_id(data.model_id, db)
@@ -200,7 +275,7 @@ async def generation(
         async with generation_lock(owner_type, owner_id) as lock:
             return await _generate_locked(
                 data, request, response, db, current_user, guest, model,
-                cost, account_id, api_token, error_headers, lock,
+                cost, account_id, api_token, error_headers, lock, storage,
             )
     except GenerationAlreadyInProgress as error:
         raise HTTPException(
@@ -233,6 +308,7 @@ async def _generate_locked(
     api_token: str,
     error_headers: dict[str, str] | None,
     lock: GenerationLock,
+    storage: ImageStorage,
 ) -> GenerateResponse:
     try:
         await check_generation_rate_limit(
@@ -281,19 +357,33 @@ async def _generate_locked(
         raise HTTPException(status_code=502, detail=detail, headers=error_headers) from error
 
     try:
-        image_path = await save_image(image, IMAGE_STORAGE_PATH)
-    except OSError as error:
-        logger.exception("Failed to store generated image")
+        content_type, extension = image_format(image)
+    except StorageError as error:
+        raise HTTPException(status_code=502, detail=str(error), headers=error_headers) from error
+    object_key = f"images/{uuid4()}.{extension}"
+    await lock.check_connection()
+    try:
+        await storage.upload(object_key, image, content_type)
+    except BaseException as error:
+        # A failed response/cancel does not prove PUT failed on the server. Do
+        # not delete a possibly pre-existing object (conditional-write conflict).
+        logger.error("Unconfirmed image upload; inspect object_key=%s", object_key)
+        if not isinstance(error, Exception):
+            raise
+        if not isinstance(error, StorageError):
+            raise
         raise HTTPException(
-            status_code=500, detail="Failed to store generated image", headers=error_headers
+            status_code=503, detail="Image storage is unavailable.", headers=error_headers,
         ) from error
 
-    image_url = str(request.url_for("images", path=image_path.name))
+    commit_started = False
     try:
         owner = {
             "user_id": current_user.id if current_user is not None else None,
             "guest_id": guest.id if guest is not None else None,
         }
+        if guest is not None and await lock_guest_history(guest.id, db) is None:
+            raise RuntimeError("Guest owner changed during generation")
         if data.chat_id is None:
             chat = await create_chat(db, **owner)
         else:
@@ -302,22 +392,40 @@ async def _generate_locked(
             chat = await get_owned_chat(data.chat_id, db, **owner, for_update=True)
             if chat is None:
                 raise RuntimeError("Chat owner changed during generation")
-        await add_prompt_and_image(
+        generation = await add_prompt_and_image(
             **owner, chat_id=chat.id, prompt=data.prompt,
-            image_url=image_url, model_id=model.model_id, session=db,
+            object_key=object_key, model_id=model.model_id, session=db,
         )
         await touch_chat(chat.id, db)
+        commit_started = True
         await db.commit()
-    except Exception as error:
-        await db.rollback()
-        try:
-            await delete_image(image_path)
-        except OSError:
-            logger.exception("Failed to remove image after database failure")
-        logger.exception("Failed to persist generation")
+    except BaseException as error:
+        # ROLLBACK after a lost COMMIT response does NOT prove non-commit.
+        # Only a pre-COMMIT failure or a definitive server rejection is safe.
+        sqlstate = getattr(getattr(error, "orig", None), "sqlstate", "") or ""
+        rejected_commit = isinstance(error, DBAPIError) and sqlstate[:2] in {"23", "40"}
+        await finish_io(_rollback_generation(db, storage, object_key, not commit_started or rejected_commit))
+        if not isinstance(error, Exception):
+            raise
+        logger.error("Failed to persist generation; object_key=%s", object_key)
         raise HTTPException(
             status_code=500, detail="Failed to save generated image", headers=error_headers
         ) from error
     return GenerateResponse(
-        chat_id=chat.id, image_url=image_url, model_id=model.model_id, model_name=model.name
+        chat_id=chat.id, generation_id=generation.id, model_id=model.model_id, model_name=model.name
     )
+
+
+async def _rollback_generation(db, storage: ImageStorage, object_key: str, can_delete: bool) -> None:
+    try:
+        await db.rollback()
+    except Exception:
+        can_delete = False
+        logger.error("Failed to confirm rollback; retain object_key=%s", object_key)
+    if not can_delete:
+        logger.error("Database outcome unknown; retain object_key=%s for reconciliation", object_key)
+        return
+    try:
+        await storage.delete(object_key)
+    except StorageError:
+        logger.error("Compensation failed; orphan object_key=%s requires administrative cleanup", object_key)

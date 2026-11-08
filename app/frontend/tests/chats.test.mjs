@@ -9,9 +9,9 @@ const A = '01900000-0000-7000-8000-000000000001'
 const B = '01900000-0000-7000-8000-000000000002'
 const model = { model_id: 'cloudflare/flux-1-schnell', name: 'FLUX.1-schnell' }
 const summary = id => ({ id, title: `First ${id}`, created_at: '2020-01-01', updated_at: '2021-01-01' })
-const rows = prefix => [0, 1].map(id => ({ id, prompt: `${prefix}-${id}`, image_url: `/${prefix}-${id}.jpg`,
+const rows = prefix => [0, 1].map(id => ({ id: id + 1, prompt: `${prefix}-${id}`,
   model_id: null, model_name: null, created_at: '2020-01-01' }))
-const result = id => ({ chat_id: id, image_url: '/result.jpg', model_id: model.model_id, model_name: model.name })
+const result = id => ({ chat_id: id, generation_id: 1, model_id: model.model_id, model_name: model.name })
 const deferred = () => {
   let resolve, reject
   const promise = new Promise((yes, no) => { resolve = yes; reject = no })
@@ -172,7 +172,7 @@ test('reload refetches every generation, rather than trusting cached images', as
   assert.equal(h.messages()[0].content, 'server-0')
   assert.equal(h.fixture.chatCalls[0][0], A)
   assert.equal(h.currentChat.readCurrentChat(2), null)
-  h.storage.set('ttm.current-chat.v2', JSON.stringify({ owner: 1, selectedId: 123, input: '', messages: [] }))
+  h.storage.set('ttm.current-chat.v3', JSON.stringify({ owner: 1, selectedId: 123, input: '', messages: [] }))
   assert.equal(h.currentChat.readCurrentChat(1), null)
 })
 

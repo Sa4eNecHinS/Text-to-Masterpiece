@@ -170,7 +170,7 @@ export default function GeneratePage() {
       if (version !== viewVersion.current) return;
       activeChat.current = result.chat_id;
       setSelectedId(result.chat_id);
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Result:', image: result.image_url, modelName: result.model_name }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Result:', generationId: result.generation_id, modelName: result.model_name }]);
       history.refresh();
     } catch (err) {
       if (version !== viewVersion.current) return;

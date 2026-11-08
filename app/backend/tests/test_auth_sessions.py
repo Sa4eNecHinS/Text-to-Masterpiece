@@ -17,7 +17,7 @@ async def test_guest_history_merge_and_session(client, db, provider, action):
     guest_id = client.cookies.get("guest_id")
     assert guest_id
     requests = provider(lambda request: httpx.Response(200, json={
-        "success": True, "result": {"image": "aW1hZ2U="},
+        "success": True, "result": {"image": "/9j/aW1hZ2U="},
     }))
     for model_id in ["cloudflare/flux-1-schnell", "cloudflare/flux-2-klein-4b"]:
         response = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city", "model_id": model_id})

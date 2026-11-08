@@ -38,6 +38,13 @@ async def get_guest_by_uuid(
     return result.scalar_one_or_none()
 
 
+async def lock_guest_history(guest_id: int, session: AsyncSession) -> Guest | None:
+    # Shared write order: guest -> chat -> generation. Serialize the short
+    # persistence/transfer transactions, never the Cloudflare/S3 network calls.
+    result = await session.execute(select(Guest).where(Guest.id == guest_id).with_for_update())
+    return result.scalar_one_or_none()
+
+
 async def add_user(email: str, password: str, session: AsyncSession) -> User:
     user = User(email=email, password=await hash_password(password=password))
     session.add(user)
@@ -70,7 +77,7 @@ async def get_model_by_id(model_id: str, session: AsyncSession) -> Model | None:
 async def add_prompt_and_image(
     *,
     prompt: str,
-    image_url: str,
+    object_key: str,
     session: AsyncSession,
     user_id: int | None = None,
     guest_id: int | None = None,
@@ -84,7 +91,7 @@ async def add_prompt_and_image(
         user_id=user_id,
         guest_id=guest_id,
         prompt=prompt,
-        image_url=image_url,
+        object_key=object_key,
         model_id=model_id,
         chat_id=chat_id,
     )
@@ -101,6 +108,16 @@ def _owner_filter(model, user_id: int | None, guest_id: int | None):
     if (user_id is None) == (guest_id is None):
         raise ValueError("Exactly one owner must be supplied")
     return model.user_id == user_id if user_id is not None else model.guest_id == guest_id
+
+
+async def get_owned_generation(
+    generation_id: int, session: AsyncSession, *,
+    user_id: int | None = None, guest_id: int | None = None,
+) -> UserRequest | None:
+    result = await session.execute(select(UserRequest).where(
+        UserRequest.id == generation_id, _owner_filter(UserRequest, user_id, guest_id),
+    ))
+    return result.scalar_one_or_none()
 
 
 async def get_owned_chat(
@@ -168,7 +185,6 @@ def _history_row(request: UserRequest, model_name: str | None) -> dict:
     return {
         "id": request.id,
         "prompt": request.prompt,
-        "image_url": request.image_url,
         "created_at": request.created_at,
         "model_id": request.model_id,
         "model_name": model_name,
@@ -218,6 +234,10 @@ async def merge_guest_requests_into_user(
     *,
     delete_guest: bool = True,
 ) -> int:
+    # Block concurrent guest persistence before taking a snapshot of its chats.
+    # Otherwise a just-committed chat could be missed and deleted by FK cascade.
+    if await lock_guest_history(guest_id, session) is None:
+        return 0
     # Callers own the transaction. Move chats before requests and delete the
     # guest last, otherwise the guest FK cascade would delete its chats/history.
     await session.execute(

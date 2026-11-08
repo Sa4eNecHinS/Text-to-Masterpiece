@@ -21,7 +21,7 @@ from backend.database.models import Base, Guest, Model, RateLimitBucket, User, U
 from backend.database.rate_limiting import RateLimitExceeded, consume_bucket_token
 from backend.main import app
 
-PAYLOAD = {"success": True, "result": {"image": base64.b64encode(b"image").decode()}}
+PAYLOAD = {"success": True, "result": {"image": base64.b64encode(b"\xff\xd8\xffimage").decode()}}
 D = Decimal
 
 

@@ -1,5 +1,6 @@
 """Independent PostgreSQL connections and the full /generate boundary; no real AI."""
 import asyncio
+import threading
 from decimal import Decimal
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import partial
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from backend.api import dependencies, images
 from backend.core.security import create_access_token
 from backend.database.dependencies import get_db
+from backend.database.queries import add_prompt_and_image, create_chat, lock_guest_history, merge_guest_requests_into_user
 from backend.database.generation_lock import (
     GLOBAL_GENERATION_NAMESPACE, GenerationAlreadyInProgress,
     GenerationCapacityExceeded, generation_lock, generation_lock_key,
@@ -23,6 +25,7 @@ from backend.database.generation_lock import (
 from backend.database.models import AIDailyUsage, Base, Chat, Guest, Model, RateLimitBucket, User, UserRequest
 from backend.main import app
 from backend.services import ai_budget, image_generation
+from backend.services.image_storage import StorageError
 
 
 @pytest_asyncio.fixture
@@ -202,7 +205,7 @@ async def test_five_users_run_sixth_refused_without_spending_then_reuses_slot(
         entered[index].set()
         try:
             await finish[index].wait()
-            return b"image"
+            return b"\xff\xd8\xffimage"
         finally:
             active -= 1
     provider = AsyncMock(side_effect=generate)
@@ -283,7 +286,7 @@ async def test_concurrent_generate_returns_409_without_spending(client, real_loc
             ))).scalar_one() == 0
         entered.set()
         await finish.wait()
-        return b"image"
+        return b"\xff\xd8\xffimage"
     provider = AsyncMock(side_effect=generate)
     monkeypatch.setattr(images, "generate_image", provider)
     first = asyncio.create_task(client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"}))
@@ -317,7 +320,7 @@ async def test_concurrent_generate_returns_409_without_spending(client, real_loc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["cloudflare", "timeout", "total-timeout", "storage", "history"])
-async def test_generation_failures_release_lock(client, real_locks, provider, monkeypatch, tmp_path, failure):
+async def test_generation_failures_release_lock(client, real_locks, provider, monkeypatch, tmp_path, storage, failure):
     kind, owner_id = await install_owner(client, real_locks, False)
 
     async def handler(request):
@@ -336,13 +339,13 @@ async def test_generation_failures_release_lock(client, real_locks, provider, mo
     if failure in {"cloudflare", "timeout", "total-timeout"}:
         provider(handler)
     else:
-        monkeypatch.setattr(images, "generate_image", AsyncMock(return_value=b"image"))
+        monkeypatch.setattr(images, "generate_image", AsyncMock(return_value=b"\xff\xd8\xffimage"))
         if failure == "storage":
-            monkeypatch.setattr(images, "save_image", AsyncMock(side_effect=OSError("disk full")))
+            storage.upload.side_effect = StorageError("storage unavailable")
         else:
             monkeypatch.setattr(images, "add_prompt_and_image", AsyncMock(side_effect=RuntimeError("history failed")))
     response = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})
-    assert response.status_code == (502 if failure in {"cloudflare", "timeout", "total-timeout"} else 500)
+    assert response.status_code == (503 if failure == "storage" else 502 if failure in {"cloudflare", "timeout", "total-timeout"} else 500)
     if failure == "total-timeout":
         assert deadlines == [60.0]
     await assert_all_slots_free(real_locks)
@@ -359,7 +362,7 @@ async def test_chat_continuation_with_real_limits_and_postgres(client, real_lock
     from uuid import UUID
     await install_owner(client, real_locks, True)
     requests = provider(lambda request: httpx.Response(200, json={
-        "success": True, "result": {"image": "aW1hZ2U="},
+        "success": True, "result": {"image": "/9j/aW1hZ2U="},
     }))
     first = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "first"})
     assert first.status_code == 200
@@ -375,6 +378,83 @@ async def test_chat_continuation_with_real_limits_and_postgres(client, real_lock
         {"prompt": prompt, "steps": 4} for prompt in ["first", "second"]
     ]
     await assert_all_slots_free(real_locks)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_upload_holds_locks_until_sync_worker_finishes(client, real_locks, storage, monkeypatch):
+    kind, owner_id = await install_owner(client, real_locks, True)
+    monkeypatch.setattr(images, "generate_image", AsyncMock(return_value=b"\xff\xd8\xffimage"))
+    entered, release = threading.Event(), threading.Event()
+    original_put = storage.client.put_object.side_effect
+    def upload(**kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original_put(**kwargs)
+    storage.client.put_object.side_effect = upload
+    task = asyncio.create_task(client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"}))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        second = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "again"})
+        assert second.status_code == 409
+        images.reserve_generation_neurons.assert_awaited_once()
+        task.cancel()
+        await asyncio.sleep(0.01)
+        assert not task.done()
+        async with real_locks.engine.connect() as observer:
+            assert (await observer.execute(text("SELECT pg_try_advisory_lock(:key)"), {
+                "key": generation_lock_key(kind, owner_id),
+            })).scalar_one() is False
+            assert (await observer.execute(text(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND pid <> pg_backend_pid() AND state = 'idle in transaction'"
+            ))).scalar_one() == 0
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)
+    await assert_all_slots_free(real_locks)
+    async with real_locks.factory() as session:
+        assert not list(await session.scalars(select(UserRequest)))
+    # The PUT succeeded but its acknowledgement was cancelled: retain/log for
+    # reconciliation rather than pretending the object definitely wasn't made.
+    assert len(storage.objects) == 1
+
+
+@pytest.mark.asyncio
+async def test_guest_transfer_serializes_with_image_persistence(lock_db):
+    async with lock_db.factory.begin() as session:
+        guest = Guest(guest_id=uuid4())
+        user = User(email="transfer@example.com", password="unused")
+        session.add_all([guest, user])
+        await session.flush()
+        guest_id, user_id = guest.id, user.id
+    started = asyncio.Event()
+    async def transfer():
+        async with lock_db.factory.begin() as session:
+            started.set()
+            await merge_guest_requests_into_user(guest_id, user_id, session)
+    async with lock_db.factory() as session:
+        assert await lock_guest_history(guest_id, session) is not None
+        chat = await create_chat(session, guest_id=guest_id)
+        generation = await add_prompt_and_image(
+            session=session, guest_id=guest_id, chat_id=chat.id,
+            prompt="just persisted", object_key="images/transferred.png",
+        )
+        chat_id, generation_id = chat.id, generation.id
+        task = asyncio.create_task(transfer())
+        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        await session.commit()
+    await asyncio.wait_for(task, 5)
+    async with lock_db.factory() as session:
+        chat = await session.get(Chat, chat_id)
+        generation = await session.get(UserRequest, generation_id)
+        assert chat is not None and generation is not None
+        assert chat.user_id == generation.user_id == user_id
+        assert chat.guest_id is None and generation.guest_id is None
+        assert generation.object_key == "images/transferred.png"
+        assert await session.get(Guest, guest_id) is None
 
 
 @pytest.mark.asyncio

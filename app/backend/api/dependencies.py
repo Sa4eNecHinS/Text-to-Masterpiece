@@ -1,7 +1,7 @@
 import jwt
 from decimal import Decimal
 from typing import Annotated
-from fastapi import Cookie, Depends, HTTPException, Response, status
+from fastapi import Cookie, Depends, Header, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import COOKIE_SAMESITE, COOKIE_SECURE, settings
@@ -19,8 +19,14 @@ AccessToken = Annotated[str | None, Cookie(alias="access_token")]
 
 
 async def get_optional_current_user(
-    session: DbSession, access_token: AccessToken = None
+    session: DbSession, access_token: AccessToken = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> User | None:
+    if authorization is not None:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            return None
+        access_token = token
     if not access_token:
         return None
     try:

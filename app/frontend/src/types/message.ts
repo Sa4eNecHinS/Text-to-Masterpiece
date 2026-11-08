@@ -1,6 +1,6 @@
 export type Message = {
   role: 'user' | 'assistant'
   content: string
-  image?: string
+  generationId?: number
   modelName?: string | null
 }

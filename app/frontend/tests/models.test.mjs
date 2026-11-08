@@ -12,7 +12,10 @@ async function loadSource(path) {
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   })
+  const privateImageStub = `data:text/javascript;base64,${Buffer.from('export function PrivateImage() { return null }').toString('base64')}`
   const code = outputText.replaceAll('import.meta.env.VITE_API_URL', 'undefined')
+    .replace('"@/components/chat/PrivateImage"', JSON.stringify(privateImageStub))
+    .replace("'@/components/chat/PrivateImage'", JSON.stringify(privateImageStub))
     .replace(/from ["'](react(?:\/[^"']+)?)["']/g, (_, specifier) => `from ${JSON.stringify(import.meta.resolve(specifier))}`)
   return import(`data:text/javascript;base64,${Buffer.from(`${code}\n// instance ${moduleId++}`).toString('base64')}`)
 }
@@ -54,7 +57,7 @@ for (const model of models) {
   test(`generation sends only prompt and selected model: ${model.name}`, async t => {
     const api = await loadSource('services/requests.ts')
     const calls = []
-    const result = { chat_id: '01900000-0000-7000-8000-000000000001', image_url: '/images/result.jpg', model_id: model.model_id, model_name: model.name }
+    const result = { chat_id: '01900000-0000-7000-8000-000000000001', generation_id: 1, model_id: model.model_id, model_name: model.name }
     t.mock.method(globalThis, 'fetch', async (url, options) => {
       calls.push(url)
       if (url.endsWith('/users/me')) return json({}, 401)
@@ -76,7 +79,7 @@ test('continuation sends chat_id but never prior messages or images', async t =>
   const chatId = '01900000-0000-7000-8000-000000000001'
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.deepEqual(JSON.parse(options.body), { prompt: 'second', model_id: models[0].model_id, chat_id: chatId })
-    return json({ chat_id: chatId, image_url: '/new.jpg', model_id: models[0].model_id, model_name: models[0].name })
+    return json({ chat_id: chatId, generation_id: 2, model_id: models[0].model_id, model_name: models[0].name })
   })
   assert.equal((await api.generateImage('second', models[0].model_id, chatId)).chat_id, chatId)
 })
@@ -84,7 +87,7 @@ test('continuation sends chat_id but never prior messages or images', async t =>
 test('generation rejects a successful response missing chat_id', async t => {
   const api = await loadSource('services/requests.ts')
   api.rememberSession({ id: 1, email: 'user@example.com' })
-  t.mock.method(globalThis, 'fetch', async () => json({ image_url: '/new.jpg', model_id: models[0].model_id, model_name: models[0].name }))
+  t.mock.method(globalThis, 'fetch', async () => json({ generation_id: 1, model_id: models[0].model_id, model_name: models[0].name }))
   await assert.rejects(api.generateImage('city', models[0].model_id), /valid chat_id/)
 })
 
@@ -93,7 +96,7 @@ test('chat list pagination and detail preserve server order and legacy nulls', a
   api.rememberSession({ id: 1, email: 'user@example.com' })
   const chatId = '01900000-0000-7000-8000-000000000001'
   const chats = [{ id: chatId, title: 'First prompt', created_at: '2020-01-01', updated_at: '2021-01-01' }]
-  const entries = ['first', 'second'].map((prompt, id) => ({ id, prompt, image_url: `/old-${id}.jpg`,
+  const entries = ['first', 'second'].map((prompt, id) => ({ id, prompt,
     created_at: '2020-01-01', model_id: null, model_name: null }))
   const controller = new AbortController()
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -145,7 +148,7 @@ test('history preserves model names and legacy nulls', async t => {
   const api = await loadSource('services/requests.ts')
   api.rememberSession({ id: 1, email: 'user@example.com' })
   const entries = [models[0], null].map((model, index) => ({
-    id: index, prompt: 'city', image_url: '/images/test.jpg', created_at: '2026-01-01T00:00:00Z',
+    id: index + 1, prompt: 'city', created_at: '2026-01-01T00:00:00Z',
     model_id: model?.model_id ?? null, model_name: model?.name ?? null,
   }))
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -154,6 +157,43 @@ test('history preserves model names and legacy nulls', async t => {
     return json(entries)
   })
   assert.deepEqual(await api.getChatHistory(50), entries)
+})
+
+for (const authenticated of [false, true]) {
+  test(`private Blob request uses the existing HttpOnly session (${authenticated ? 'user' : 'guest'})`, async t => {
+    const api = await loadSource('services/requests.ts')
+    if (authenticated) api.rememberSession({ id: 1, email: 'owner@example.com' })
+    const controller = new AbortController()
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+      if (url.endsWith('/users/me')) return json({}, 401)
+      if (url.endsWith('/Text-to-Masterpiece')) return json({ ok: true })
+      assert.equal(url, `${api.API_BASE_URL}/images/7`)
+      assert.equal(options.credentials, 'include')
+      assert.equal(options.signal, controller.signal)
+      assert.equal(options.headers, undefined) // JWT/guest cookies are not exposed to JS.
+      return new Response(new Blob(['image'], { type: 'image/png' }), { headers: { 'Content-Type': 'image/png' } })
+    })
+    const image = await api.getGenerationImage(7, controller.signal)
+    assert.ok(image instanceof Blob)
+    assert.equal(image.type, 'image/png')
+  })
+}
+
+for (const [status, message] of [[401, /session has expired/], [404, /not found/], [503, /storage unavailable/]]) {
+  test(`private image HTTP ${status} is shown to the caller`, async t => {
+    const api = await loadSource('services/requests.ts')
+    api.rememberSession({ id: 1, email: 'owner@example.com' })
+    t.mock.method(globalThis, 'fetch', async () => json({ detail: 'storage unavailable' }, status))
+    await assert.rejects(api.getGenerationImage(7), message)
+  })
+}
+
+test('interrupted private image stream has a readable error', async t => {
+  const api = await loadSource('services/requests.ts')
+  api.rememberSession({ id: 1, email: 'owner@example.com' })
+  t.mock.method(globalThis, 'fetch', async () => ({ ok: true, status: 200,
+    blob: async () => { throw new TypeError('stream terminated') } }))
+  await assert.rejects(api.getGenerationImage(7), /download was interrupted/)
 })
 
 test('model selector displays server names and the selected model', async () => {
@@ -194,7 +234,7 @@ test('sidebar displays one first-prompt title per chat; restored generations kee
   const { ChatHistory } = await loadSource('components/chat/ChatHistory.tsx')
   const { MessageList } = await loadSource('components/chat/MessageList.tsx')
   const entries = [models[1], null].map((model, index) => ({
-    id: index, prompt: 'city', image_url: '/images/test.jpg', created_at: '2026-01-01T00:00:00Z',
+    id: index + 1, prompt: 'city', created_at: '2026-01-01T00:00:00Z',
     model_id: model?.model_id ?? null, model_name: model?.name ?? null,
   }))
   const history = renderToStaticMarkup(createElement(ChatHistory, {
@@ -207,7 +247,7 @@ test('sidebar displays one first-prompt title per chat; restored generations kee
   assert.match(history, /First prompt 1/)
   assert.match(history, /aria-current="true"/)
   const messages = renderToStaticMarkup(createElement(MessageList, {
-    messages: entries.map(entry => ({ role: 'assistant', content: 'Result:', image: entry.image_url, modelName: entry.model_name })),
+    messages: entries.map(entry => ({ role: 'assistant', content: 'Result:', generationId: entry.id, modelName: entry.model_name })),
     loading: false,
   }))
   assert.match(messages, /FLUX-2-klein-4b/)

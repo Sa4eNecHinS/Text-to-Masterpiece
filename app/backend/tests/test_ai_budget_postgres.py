@@ -78,7 +78,7 @@ async def test_first_and_repeated_generation(client, real_budget, provider, db):
 
 
 @pytest.mark.asyncio
-async def test_api_budget_exhaustion(client, real_budget, provider, db, tmp_path, monkeypatch):
+async def test_api_budget_exhaustion(client, real_budget, provider, db, storage, monkeypatch):
     monkeypatch.setattr(images, "settings", SimpleNamespace(AI_DAILY_NEURON_LIMIT=Decimal("65")))
     requests = provider(lambda request: httpx.Response(200, json=PAYLOAD))
     first = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})
@@ -87,7 +87,7 @@ async def test_api_budget_exhaustion(client, real_budget, provider, db, tmp_path
     assert response.status_code == 429
     assert response.json()["detail"] == "Daily AI generation limit reached."
     assert len(requests) == 1
-    assert len(list(tmp_path.iterdir())) == 1
+    assert len(storage.objects) == 1
     assert len(list(db.sync.scalars(select(UserRequest)))) == 1
     assert (await usage_rows(real_budget))[0].used_neurons == Decimal("65")
 
@@ -127,7 +127,7 @@ async def test_concurrent_reservations_allow_only_one(budget_db, existing):
 
 @pytest.mark.asyncio
 async def test_concurrent_api_requests_allow_one_provider_call(
-    client, real_budget, provider, db, tmp_path, monkeypatch
+    client, real_budget, provider, db, storage, monkeypatch
 ):
     monkeypatch.setattr(
         images, "settings", SimpleNamespace(AI_DAILY_NEURON_LIMIT=Decimal("65"))
@@ -140,7 +140,7 @@ async def test_concurrent_api_requests_allow_one_provider_call(
     assert sorted(response.status_code for response in responses) == [200, 429]
     assert len(requests) == 1
     assert (await usage_rows(real_budget))[0].used_neurons == Decimal("65")
-    assert len(list(tmp_path.iterdir())) == 1
+    assert len(storage.objects) == 1
     assert len(list(db.sync.scalars(select(UserRequest)))) == 1
 
 

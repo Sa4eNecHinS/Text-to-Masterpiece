@@ -31,7 +31,7 @@ class ChatSummary(BaseModel):
 
 class GenerateResponse(BaseModel):
     chat_id: UUID
-    image_url: str
+    generation_id: int
     model_id: str
     model_name: str
 
@@ -39,7 +39,6 @@ class GenerateResponse(BaseModel):
 class ChatHistoryEntry(BaseModel):
     id: int
     prompt: str
-    image_url: str
     created_at: datetime
     model_id: str | None
     model_name: str | None

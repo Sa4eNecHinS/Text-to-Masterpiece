@@ -184,7 +184,10 @@ class UserRequest(Base):
         ForeignKey("tests.guests.id", ondelete="CASCADE"), nullable=True
     )
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    image_url: Mapped[str] = mapped_column(Text, nullable=False)
+    object_key: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
     model_id: Mapped[str | None] = mapped_column(
         Text,
         ForeignKey("tests.models.model_id", name="fk_users_requests_model_id"),

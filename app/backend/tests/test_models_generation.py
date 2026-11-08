@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from backend.api import images
 from backend.core.security import create_access_token
-from backend.database.models import Guest, Model, User, UserRequest
+from backend.database.models import Chat, Guest, Model, User, UserRequest
+from backend.services.image_storage import StorageError
 from backend.services.image_generation import ImageGenerationError, generate_image
 
 MODEL_IDS = ["cloudflare/flux-1-schnell", "cloudflare/flux-2-klein-4b"]
@@ -58,7 +59,7 @@ async def test_empty_catalogue(client, db):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_id", MODEL_IDS)
 @pytest.mark.parametrize("authenticated", [False, True])
-async def test_generate_and_history(client, db, tmp_path, provider, model_id, authenticated):
+async def test_generate_and_history(client, db, storage, provider, model_id, authenticated):
     owner = add_owner(db, authenticated, client)
     requests = provider(lambda request: httpx.Response(200, json=PAYLOAD))
     response = await client.post("/Text-to-Masterpiece/generate", json={
@@ -68,8 +69,12 @@ async def test_generate_and_history(client, db, tmp_path, provider, model_id, au
     data = response.json()
     assert data["model_id"] == model_id
     assert data["model_name"] == db.sync.get(Model, model_id).name
-    assert list(tmp_path.iterdir())[0].read_bytes() == IMAGE
-    assert data["image_url"].startswith("http://test/images/")
+    generation = db.sync.get(UserRequest, data["generation_id"])
+    assert storage.objects[generation.object_key] == (IMAGE, "image/jpeg")
+    assert generation.object_key.endswith(".jpg")
+    assert "image_url" not in data and "object_key" not in data
+    downloaded = await client.get(f"/images/{generation.id}")
+    assert downloaded.content == IMAGE and downloaded.headers["content-type"] == "image/jpeg"
     request, = requests
     assert str(request.url).endswith(db.sync.get(Model, model_id).provider_model_id)
     if model_id == MODEL_IDS[0]:
@@ -169,27 +174,23 @@ async def test_provider_failure_has_no_history(client, db, tmp_path, provider, m
 
 
 @pytest.mark.asyncio
-async def test_database_failure_removes_image(client, db, provider, tmp_path, monkeypatch):
+async def test_database_failure_removes_image(client, db, provider, storage, monkeypatch):
     provider(lambda request: httpx.Response(200, json=PAYLOAD))
-    async def commit():
-        if db.commit.await_count == 1:
-            db.sync.commit()  # Owner verification succeeds.
-        else:
-            raise RuntimeError("history commit failed")
-    monkeypatch.setattr(db, "commit", AsyncMock(side_effect=commit))
+    monkeypatch.setattr(images, "touch_chat", AsyncMock(side_effect=RuntimeError("history failed before COMMIT")))
     response = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})
     assert response.status_code == 500
     db.rollback.assert_awaited_once()
     assert not list(db.sync.scalars(select(UserRequest)))
-    assert not list(tmp_path.iterdir())
+    assert not storage.objects
+    storage.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_storage_failure_has_no_history(client, db, provider, monkeypatch):
+async def test_storage_failure_has_no_history(client, db, provider, storage):
     provider(lambda request: httpx.Response(200, json=PAYLOAD))
-    monkeypatch.setattr(images, "save_image", AsyncMock(side_effect=OSError("disk full")))
+    storage.upload.side_effect = StorageError("unavailable")
     response = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})
-    assert response.status_code == 500
+    assert response.status_code == 503
     assert not list(db.sync.scalars(select(UserRequest)))
 
 
@@ -198,13 +199,19 @@ async def test_storage_failure_has_no_history(client, db, provider, monkeypatch)
 async def test_legacy_history_pagination_and_ownership(client, db, authenticated):
     owner = add_owner(db, authenticated, client)
     ownership = {"user_id" if authenticated else "guest_id": owner.id}
+    chat = Chat(id=uuid4(), **ownership)
+    db.sync.add(chat)
+    db.sync.flush()
     for day, model_id in [(1, None), (2, MODEL_IDS[1])]:
-        db.sync.add(UserRequest(**ownership, prompt=f"day-{day}", image_url="/images/test.jpg",
+        db.sync.add(UserRequest(**ownership, prompt=f"day-{day}", object_key="images/test.jpg", chat_id=chat.id,
                                model_id=model_id, created_at=datetime(2026, 1, day, tzinfo=timezone.utc)))
     other = Guest(guest_id=uuid4())
     db.sync.add(other)
     db.sync.flush()
-    db.sync.add(UserRequest(guest_id=other.id, prompt="private", image_url="/images/private.jpg"))
+    other_chat = Chat(id=uuid4(), guest_id=other.id)
+    db.sync.add(other_chat)
+    db.sync.flush()
+    db.sync.add(UserRequest(guest_id=other.id, chat_id=other_chat.id, prompt="private", object_key="images/private.jpg"))
     db.sync.commit()
     first = (await client.get("/Text-to-Masterpiece/chat_history?limit=1&offset=0")).json()
     second = (await client.get("/Text-to-Masterpiece/chat_history?limit=1&offset=1")).json()

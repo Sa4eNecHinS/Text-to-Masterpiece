@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { Message } from '@/types/message';
+import { PrivateImage } from '@/components/chat/PrivateImage';
 
 interface MessageListProps {
   messages: Message[];
@@ -43,30 +44,14 @@ export const MessageList = ({ messages, loading }: MessageListProps) => {
               lineHeight: 1.5,
               border: msg.role === 'user' ? '1px solid var(--border)' : 'none',
               color: 'var(--text)',
-              marginBottom: msg.image ? '12px' : '0' 
+              marginBottom: msg.generationId ? '12px' : '0'
             }}>
               {msg.content}
             </div>
           )}
 
-          {msg.image && <small className="generation-model">{msg.modelName || 'Модель неизвестна'}</small>}
-          {msg.image && (
-            <img
-              className="generated-image"
-              src={msg.image} 
-              alt="Generated" 
-              style={{ 
-                borderRadius: '12px', 
-                maxWidth: '100%', 
-                width: '512px', 
-                maxHeight: '512px',
-                objectFit: 'cover',
-                border: '1px solid var(--border)',
-                display: 'block', 
-                boxShadow: '0 4px 20px rgba(0,0,0,0.5)' 
-              }} 
-            />
-          )}
+          {msg.generationId && <small className="generation-model">{msg.modelName || 'Модель неизвестна'}</small>}
+          {msg.generationId && <PrivateImage generationId={msg.generationId} />}
         </div>
       ))}
       

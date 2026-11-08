@@ -4,12 +4,12 @@ import type { ChatHistoryEntry } from '@/services/requests'
 export function generationMessages(entries: ChatHistoryEntry[]): Message[] {
   return entries.flatMap(entry => [
     { role: 'user' as const, content: entry.prompt },
-    { role: 'assistant' as const, content: 'Result:', image: entry.image_url, modelName: entry.model_name },
+    { role: 'assistant' as const, content: 'Result:', generationId: entry.id, modelName: entry.model_name },
   ])
 }
 
-// v1 selected a generation's numeric ID, not a chat UUID. Do not restore it.
-const KEY = 'ttm.current-chat.v2'
+// Old versions stored image URLs. Persist identifiers only, never Blob URLs.
+const KEY = 'ttm.current-chat.v3'
 export type CurrentChat = {
   owner: number | null
   messages: Message[]
@@ -24,7 +24,7 @@ export function readCurrentChat(owner: number | null): CurrentChat | null {
     if (!data || data.owner !== owner || typeof data.input !== 'string'
       || !(data.selectedId === null || (typeof data.selectedId === 'string' && data.selectedId.trim())) || !Array.isArray(data.messages)
       || !data.messages.every((message: Message) => message && (message.role === 'user' || message.role === 'assistant')
-        && typeof message.content === 'string' && (message.image === undefined || typeof message.image === 'string')
+        && typeof message.content === 'string' && (message.generationId === undefined || (typeof message.generationId === 'number' && Number.isSafeInteger(message.generationId) && message.generationId > 0))
         && (message.modelName == null || typeof message.modelName === 'string'))) return null
     return data
   } catch { return null }

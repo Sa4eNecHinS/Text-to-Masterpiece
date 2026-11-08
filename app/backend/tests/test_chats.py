@@ -28,7 +28,7 @@ def owner(db, client, authenticated):
 
 def good_provider(provider):
     return provider(lambda request: httpx.Response(200, json={
-        "success": True, "result": {"image": "aW1hZ2U="},
+        "success": True, "result": {"image": "/9j/aW1hZ2U="},
     }))
 
 
@@ -145,9 +145,9 @@ async def test_migrated_legacy_rows_pagination_and_stable_order(client, db):
     db.sync.flush()
     # Same timestamps intentionally exercise the ID tiebreakers, not row order.
     for prompt in ["Legacy first", "Legacy second"]:
-        db.sync.add(UserRequest(**ownership, chat_id=ids[0], prompt=prompt, image_url="/old.jpg", model_id=None, created_at=old))
+        db.sync.add(UserRequest(**ownership, chat_id=ids[0], prompt=prompt, object_key="images/old.jpg", model_id=None, created_at=old))
     for index in (1, 2):
-        db.sync.add(UserRequest(**ownership, chat_id=ids[index], prompt=f"Chat {index}", image_url="/old.jpg", created_at=old))
+        db.sync.add(UserRequest(**ownership, chat_id=ids[index], prompt=f"Chat {index}", object_key="images/old.jpg", created_at=old))
     db.sync.commit()
     pages = [(await client.get(f"{BASE}/chats?limit=1&offset={index}")).json()[0] for index in range(3)]
     assert [row["id"] for row in pages] == [str(ids[2]), str(ids[1]), str(ids[0])]

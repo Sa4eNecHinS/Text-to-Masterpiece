@@ -6,7 +6,8 @@ import tempfile
 from pathlib import Path
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+from io import BytesIO
 
 # Set before app imports; never use credentials or a database from the local .env.
 os.environ.update(
@@ -19,6 +20,8 @@ os.environ.update(
     AI_NEURON_COST_FLUX_2_KLEIN_4B="110", AI_MAX_CONCURRENT_GENERATIONS="5",
     RATE_LIMIT_USER_CAPACITY="1", RATE_LIMIT_USER_REFILL_SECONDS="15",
     RATE_LIMIT_IP_CAPACITY="5", RATE_LIMIT_IP_REFILL_PER_MINUTE="45",
+    B2_ENDPOINT="https://s3.example.invalid", B2_REGION="test-region",
+    B2_BUCKET_NAME="test-images", B2_KEY_ID="test-key-id", B2_APPLICATION_KEY="test-key",
 )
 
 import httpx
@@ -33,6 +36,7 @@ from backend.database.dependencies import get_db
 from backend.database.models import Base, Model
 from backend.main import app
 from backend.services import image_generation
+from backend.services.image_storage import S3ImageStorage
 
 # Preserve the real class when the provider's client factory is mocked.
 AsyncClient = httpx.AsyncClient
@@ -70,13 +74,42 @@ def db():
     engine.dispose()
 
 
+@pytest.fixture
+def storage():
+    objects, bodies = {}, []
+    def put(**options):
+        assert options["IfNoneMatch"] == "*"
+        assert options["Key"] not in objects
+        objects[options["Key"]] = (options["Body"], options["ContentType"])
+        return {}
+    def get(**options):
+        from botocore.exceptions import ClientError
+        if options["Key"] not in objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        data, content_type = objects[options["Key"]]
+        body = BytesIO(data)
+        bodies.append(body)
+        return {"Body": body, "ContentType": content_type, "ContentLength": len(data)}
+    sdk = SimpleNamespace(
+        put_object=Mock(side_effect=put), get_object=Mock(side_effect=get),
+        delete_object=Mock(side_effect=lambda **options: objects.pop(options["Key"], None)),
+        close=Mock(),
+    )
+    store = S3ImageStorage(sdk, "test-images")
+    store.objects, store.bodies = objects, bodies
+    store.upload = AsyncMock(wraps=store.upload)
+    store.download = AsyncMock(wraps=store.download)
+    store.delete = AsyncMock(wraps=store.delete)
+    return store
+
+
 @pytest_asyncio.fixture
-async def client(db, tmp_path, monkeypatch):
+async def client(db, storage, monkeypatch):
     async def override_db():
         yield db
 
     app.dependency_overrides[get_db] = override_db
-    monkeypatch.setattr(images, "IMAGE_STORAGE_PATH", tmp_path)
+    app.dependency_overrides[images.get_storage] = lambda: storage
     # Existing SQLite tests isolate the reservation boundary. PostgreSQL tests
     # replace this with the real implementation against a disposable schema.
     monkeypatch.setattr(images, "reserve_generation_neurons", AsyncMock())

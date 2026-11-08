@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated
 
 from dotenv import load_dotenv
-from pydantic import Field, model_validator
+from pydantic import Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -37,7 +37,11 @@ class Settings(BaseSettings):
     CLOUDFLARE_ACCOUNT_ID: str | None = None
     CLOUDFLARE_API_TOKEN: str | None = None
     IMAGE_MODEL: str = "@cf/black-forest-labs/flux-1-schnell"
-    IMAGE_STORAGE_DIR: str = "images"
+    B2_ENDPOINT: HttpUrl = "https://s3.us-east-005.backblazeb2.com"
+    B2_REGION: str = "us-east-005"
+    B2_BUCKET_NAME: str = "ttm-images"
+    B2_KEY_ID: SecretStr | None = None
+    B2_APPLICATION_KEY: SecretStr | None = None
 
     # Global slot numbers use PostgreSQL's two-int32 advisory-lock API.
     AI_MAX_CONCURRENT_GENERATIONS: Annotated[int, Field(gt=0, le=2**31 - 1)] = 5
@@ -75,11 +79,6 @@ def neuron_cost(model_id: str) -> Decimal:
         "AI neuron cost is not configured for the selected model."
     )
 
-
-IMAGE_STORAGE_PATH = Path(settings.IMAGE_STORAGE_DIR)
-if not IMAGE_STORAGE_PATH.is_absolute():
-    IMAGE_STORAGE_PATH = BACKEND_DIR / IMAGE_STORAGE_PATH
-IMAGE_STORAGE_PATH = IMAGE_STORAGE_PATH.resolve()
 
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in {
     "1", "true", "yes", "on"

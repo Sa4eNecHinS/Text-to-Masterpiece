@@ -1,7 +1,7 @@
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
 export type ImageModel = { model_id: string; name: string }
-export type GenerateResponse = { chat_id: string; image_url: string; model_id: string; model_name: string }
+export type GenerateResponse = { chat_id: string; generation_id: number; model_id: string; model_name: string }
 export type ChatSummary = { id: string; title: string; created_at: string; updated_at: string }
 
 export async function getModels(signal?: AbortSignal): Promise<ImageModel[]> {
@@ -17,7 +17,6 @@ export async function getModels(signal?: AbortSignal): Promise<ImageModel[]> {
 export type ChatHistoryEntry = {
   id: number
   prompt: string
-  image_url: string
   created_at: string
   model_id: string | null
   model_name: string | null
@@ -31,7 +30,7 @@ export async function getChatHistory(offset = 0, signal?: AbortSignal): Promise<
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load history (HTTP ${response.status}).`)
   const data: unknown = await response.json()
   if (!Array.isArray(data) || !data.every(entry => entry && typeof entry.id === 'number'
-    && typeof entry.prompt === 'string' && typeof entry.image_url === 'string' && typeof entry.created_at === 'string')) {
+    && typeof entry.prompt === 'string' && typeof entry.created_at === 'string')) {
     throw new Error('The server returned an invalid history response.')
   }
   return data as ChatHistoryEntry[]
@@ -59,7 +58,7 @@ export async function getChat(chatId: string, signal?: AbortSignal): Promise<Cha
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load chat (HTTP ${response.status}).`)
   const data: unknown = await response.json()
   if (!Array.isArray(data) || !data.every(entry => entry && typeof entry.id === 'number'
-    && typeof entry.prompt === 'string' && typeof entry.image_url === 'string' && typeof entry.created_at === 'string'
+    && typeof entry.prompt === 'string' && typeof entry.created_at === 'string'
     && (entry.model_id === null || typeof entry.model_id === 'string')
     && (entry.model_name === null || typeof entry.model_name === 'string'))) {
     throw new Error('The server returned an invalid chat history.')
@@ -108,8 +107,9 @@ export async function generateImage(prompt: string, modelId: string, chatId?: st
   } catch {
     throw new Error('Image generation returned an invalid response')
   }
-  if (!data || typeof data !== 'object' || !('image_url' in data) || typeof data.image_url !== 'string' || !data.image_url.trim()) {
-    throw new Error('Image generation response did not contain a valid image_url')
+  if (!data || typeof data !== 'object' || !('generation_id' in data)
+    || typeof data.generation_id !== 'number' || !Number.isSafeInteger(data.generation_id) || data.generation_id <= 0) {
+    throw new Error('Image generation response did not contain a valid generation_id')
   }
   if (!('model_id' in data) || typeof data.model_id !== 'string'
     || !('model_name' in data) || typeof data.model_name !== 'string') {
@@ -119,6 +119,27 @@ export async function generateImage(prompt: string, modelId: string, chatId?: st
     throw new Error('Image generation response did not contain a valid chat_id')
   }
   return data as GenerateResponse
+}
+
+export async function getGenerationImage(generationId: number, signal?: AbortSignal): Promise<Blob> {
+  await initializeSession()
+  // The existing JWT is HttpOnly: the browser sends it (or the guest identity)
+  // in cookies. Never copy tokens/guest IDs into JS or into object-store URLs.
+  const response = await fetch(`${API_BASE_URL}/images/${generationId}`, { credentials: 'include', signal })
+  if (response.status === 401) throw new Error('Your session has expired. Please sign in again.')
+  if (response.status === 404) throw new Error('Image not found or no longer available.')
+  if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load image (HTTP ${response.status}).`)
+  let blob: Blob
+  try {
+    blob = await response.blob()
+  } catch (error) {
+    if (signal?.aborted) throw error
+    throw new Error('Image download was interrupted. Please try again.')
+  }
+  if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(blob.type)) {
+    throw new Error('The server returned an invalid image.')
+  }
+  return blob
 }
 
 export type User = { id: number; email: string }
