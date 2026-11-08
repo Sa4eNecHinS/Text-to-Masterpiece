@@ -1,7 +1,8 @@
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
 export type ImageModel = { model_id: string; name: string }
-export type GenerateResponse = { image_url: string; model_id: string; model_name: string }
+export type GenerateResponse = { chat_id: string; image_url: string; model_id: string; model_name: string }
+export type ChatSummary = { id: string; title: string; created_at: string; updated_at: string }
 
 export async function getModels(signal?: AbortSignal): Promise<ImageModel[]> {
   const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/models`, { signal })
@@ -36,6 +37,36 @@ export async function getChatHistory(offset = 0, signal?: AbortSignal): Promise<
   return data as ChatHistoryEntry[]
 }
 
+export async function getChats(offset = 0, signal?: AbortSignal): Promise<ChatSummary[]> {
+  await initializeSession()
+  const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/chats?limit=50&offset=${offset}`, {
+    credentials: 'include', signal,
+  })
+  if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load chats (HTTP ${response.status}).`)
+  const data: unknown = await response.json()
+  if (!Array.isArray(data) || !data.every(chat => chat && typeof chat.id === 'string' && chat.id.trim()
+    && typeof chat.title === 'string' && typeof chat.created_at === 'string' && typeof chat.updated_at === 'string')) {
+    throw new Error('The server returned an invalid chat list.')
+  }
+  return data as ChatSummary[]
+}
+
+export async function getChat(chatId: string, signal?: AbortSignal): Promise<ChatHistoryEntry[]> {
+  await initializeSession()
+  const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/chats/${encodeURIComponent(chatId)}`, {
+    credentials: 'include', signal,
+  })
+  if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load chat (HTTP ${response.status}).`)
+  const data: unknown = await response.json()
+  if (!Array.isArray(data) || !data.every(entry => entry && typeof entry.id === 'number'
+    && typeof entry.prompt === 'string' && typeof entry.image_url === 'string' && typeof entry.created_at === 'string'
+    && (entry.model_id === null || typeof entry.model_id === 'string')
+    && (entry.model_name === null || typeof entry.model_name === 'string'))) {
+    throw new Error('The server returned an invalid chat history.')
+  }
+  return data as ChatHistoryEntry[]
+}
+
 // Share initialization while the browser is still waiting for its session cookie.
 let guestSessionRequest: Promise<void> | undefined
 
@@ -51,13 +82,13 @@ async function responseDetail(resp: Response): Promise<string | undefined> {
   return undefined
 }
 
-export async function generateImage(prompt: string, modelId: string): Promise<GenerateResponse> {
+export async function generateImage(prompt: string, modelId: string, chatId?: string | null): Promise<GenerateResponse> {
   await initializeSession()
   const resp = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/generate`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, model_id: modelId })
+    body: JSON.stringify({ prompt, model_id: modelId, ...(chatId ? { chat_id: chatId } : {}) })
   })
 
   if (!resp.ok) {
@@ -83,6 +114,9 @@ export async function generateImage(prompt: string, modelId: string): Promise<Ge
   if (!('model_id' in data) || typeof data.model_id !== 'string'
     || !('model_name' in data) || typeof data.model_name !== 'string') {
     throw new Error('Image generation response did not contain valid model details')
+  }
+  if (!('chat_id' in data) || typeof data.chat_id !== 'string' || !data.chat_id.trim()) {
+    throw new Error('Image generation response did not contain a valid chat_id')
   }
   return data as GenerateResponse
 }

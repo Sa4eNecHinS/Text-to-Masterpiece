@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -106,6 +107,48 @@ class RateLimitBucket(Base):
     )
 
 
+class Chat(Base):
+    __tablename__ = "chats"
+
+    __table_args__ = (
+        CheckConstraint(
+            "(user_id IS NOT NULL AND guest_id IS NULL) OR "
+            "(user_id IS NULL AND guest_id IS NOT NULL)",
+            name="chat_has_one_owner",
+        ),
+        {"schema": "tests"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        server_default=text("uuidv7()"),
+    )
+
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("tests.users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    guest_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("tests.guests.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = {"schema": "tests"}
@@ -125,6 +168,11 @@ class UserRequest(Base):
             "char_length(prompt) <= 2000",
             name="ck_users_requests_prompt_length",
         ),
+        CheckConstraint(
+            "(user_id IS NOT NULL AND guest_id IS NULL) OR "
+            "(user_id IS NULL AND guest_id IS NOT NULL)",
+            name="request_has_one_owner",
+        ),
         {"schema": "tests"},
     )
 
@@ -142,6 +190,10 @@ class UserRequest(Base):
         ForeignKey("tests.models.model_id", name="fk_users_requests_model_id"),
         nullable=True,
     )
+    chat_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tests.chats.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -157,4 +209,23 @@ Index(
     "idx_user_requests_user_history",
     UserRequest.user_id,
     UserRequest.created_at.desc(),
+)
+
+Index(
+    "ix_chats_user_updated",
+    Chat.user_id,
+    Chat.updated_at.desc(),
+)
+
+Index(
+    "ix_chats_guest_updated",
+    Chat.guest_id,
+    Chat.updated_at.desc(),
+)
+
+Index(
+    "ix_users_requests_chat_history",
+    UserRequest.chat_id,
+    UserRequest.created_at,
+    UserRequest.id,
 )

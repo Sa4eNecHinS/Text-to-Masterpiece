@@ -1,6 +1,7 @@
 import logging
 from decimal import Decimal
 from typing import Annotated
+from uuid import UUID
 
 from backend.api.dependencies import (
     check_generation_rate_limit,
@@ -27,14 +28,20 @@ from backend.database.models import Guest, Model, User
 from backend.database.rate_limiting import RateLimitExceeded
 from backend.database.queries import (
     add_prompt_and_image,
+    create_chat,
+    get_chat_generations,
+    get_chats,
     get_guest_by_uuid,
     get_guest_chat_history,
     get_model_by_id,
     get_models,
+    get_owned_chat,
     get_user_chat_history,
+    touch_chat,
 )
 from backend.schemas import (
     ChatHistoryEntry,
+    ChatSummary,
     GenerateRequest,
     GenerateResponse,
     ModelPublic,
@@ -87,6 +94,45 @@ async def chat_history(
     )
 
 
+@router.get(f"{domain}/chats", response_model=list[ChatSummary])
+async def chats(
+    db: DbSession,
+    current_user: OptionalUser,
+    guest_uuid: GuestId = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    if current_user is not None:
+        return await get_chats(db, user_id=current_user.id, limit=limit, offset=offset)
+    guest = await get_guest_by_uuid(guest_uuid, db) if guest_uuid else None
+    return (
+        [] if guest is None
+        else await get_chats(db, guest_id=guest.id, limit=limit, offset=offset)
+    )
+
+
+@router.get(f"{domain}/chats/{{chat_id}}", response_model=list[ChatHistoryEntry])
+async def chat_generations(
+    chat_id: UUID,
+    db: DbSession,
+    current_user: OptionalUser,
+    guest_uuid: GuestId = None,
+):
+    guest = (
+        await get_guest_by_uuid(guest_uuid, db)
+        if current_user is None and guest_uuid else None
+    )
+    if current_user is None and guest is None:
+        raise HTTPException(status_code=404, detail="Chat not found.")
+    owner = {
+        "user_id": current_user.id if current_user is not None else None,
+        "guest_id": guest.id if guest is not None else None,
+    }
+    if await get_owned_chat(chat_id, db, **owner) is None:
+        raise HTTPException(status_code=404, detail="Chat not found.")
+    return await get_chat_generations(chat_id, db, **owner)
+
+
 @router.post(f"{domain}/generate", response_model=GenerateResponse)
 async def generation(
     data: GenerateRequest,
@@ -126,6 +172,14 @@ async def generation(
             await get_or_create_guest(guest_uuid, guest_response, db)
             if current_user is None else None
         )
+        if data.chat_id is not None:
+            chat = await get_owned_chat(
+                data.chat_id, db,
+                user_id=current_user.id if current_user is not None else None,
+                guest_id=guest.id if guest is not None else None,
+            )
+            if chat is None:
+                raise HTTPException(status_code=404, detail="Chat not found.")
         await db.commit()
     except SQLAlchemyError as error:
         await db.rollback()
@@ -236,22 +290,23 @@ async def _generate_locked(
 
     image_url = str(request.url_for("images", path=image_path.name))
     try:
-        if current_user is not None:
-            await add_prompt_and_image(
-                user_id=current_user.id,
-                prompt=data.prompt,
-                image_url=image_url,
-                model_id=model.model_id,
-                session=db,
-            )
+        owner = {
+            "user_id": current_user.id if current_user is not None else None,
+            "guest_id": guest.id if guest is not None else None,
+        }
+        if data.chat_id is None:
+            chat = await create_chat(db, **owner)
         else:
-            await add_prompt_and_image(
-                guest_id=guest.id,
-                prompt=data.prompt,
-                image_url=image_url,
-                model_id=model.model_id,
-                session=db,
-            )
+            # Recheck in the short persistence transaction: ownership may have
+            # changed (e.g. guest sign-in) while the provider was running.
+            chat = await get_owned_chat(data.chat_id, db, **owner, for_update=True)
+            if chat is None:
+                raise RuntimeError("Chat owner changed during generation")
+        await add_prompt_and_image(
+            **owner, chat_id=chat.id, prompt=data.prompt,
+            image_url=image_url, model_id=model.model_id, session=db,
+        )
+        await touch_chat(chat.id, db)
         await db.commit()
     except Exception as error:
         await db.rollback()
@@ -264,5 +319,5 @@ async def _generate_locked(
             status_code=500, detail="Failed to save generated image", headers=error_headers
         ) from error
     return GenerateResponse(
-        image_url=image_url, model_id=model.model_id, model_name=model.name
+        chat_id=chat.id, image_url=image_url, model_id=model.model_id, model_name=model.name
     )

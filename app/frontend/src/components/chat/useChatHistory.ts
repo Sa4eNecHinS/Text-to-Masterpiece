@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '@/components/auth/authContext'
-import { getChatHistory, type ChatHistoryEntry } from '@/services/requests'
+import { getChats, type ChatSummary } from '@/services/requests'
 
 export function useChatHistory() {
   const { user } = useAuth()
-  const [entries, setEntries] = useState<ChatHistoryEntry[]>([])
+  const [entries, setEntries] = useState<ChatSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [hasMore, setHasMore] = useState(false)
@@ -24,7 +24,7 @@ export function useChatHistory() {
       setEntries([])
       offset.current = 0
       try {
-        const rows = await getChatHistory(0, controller.signal)
+        const rows = await getChats(0, controller.signal)
         if (controller.signal.aborted) return
         setEntries(rows)
         offset.current = rows.length
@@ -48,7 +48,7 @@ export function useChatHistory() {
     setLoading(true)
     setError('')
     try {
-      const rows = await getChatHistory(offset.current, controller.signal)
+      const rows = await getChats(offset.current, controller.signal)
       if (controller.signal.aborted) return
       setEntries(previous => [...previous, ...rows.filter(row => !previous.some(entry => entry.id === row.id))])
       offset.current += rows.length

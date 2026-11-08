@@ -54,7 +54,7 @@ for (const model of models) {
   test(`generation sends only prompt and selected model: ${model.name}`, async t => {
     const api = await loadSource('services/requests.ts')
     const calls = []
-    const result = { image_url: '/images/result.jpg', model_id: model.model_id, model_name: model.name }
+    const result = { chat_id: '01900000-0000-7000-8000-000000000001', image_url: '/images/result.jpg', model_id: model.model_id, model_name: model.name }
     t.mock.method(globalThis, 'fetch', async (url, options) => {
       calls.push(url)
       if (url.endsWith('/users/me')) return json({}, 401)
@@ -69,6 +69,53 @@ for (const model of models) {
     assert.equal(calls.length, 3)
   })
 }
+
+test('continuation sends chat_id but never prior messages or images', async t => {
+  const api = await loadSource('services/requests.ts')
+  api.rememberSession({ id: 1, email: 'user@example.com' })
+  const chatId = '01900000-0000-7000-8000-000000000001'
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.deepEqual(JSON.parse(options.body), { prompt: 'second', model_id: models[0].model_id, chat_id: chatId })
+    return json({ chat_id: chatId, image_url: '/new.jpg', model_id: models[0].model_id, model_name: models[0].name })
+  })
+  assert.equal((await api.generateImage('second', models[0].model_id, chatId)).chat_id, chatId)
+})
+
+test('generation rejects a successful response missing chat_id', async t => {
+  const api = await loadSource('services/requests.ts')
+  api.rememberSession({ id: 1, email: 'user@example.com' })
+  t.mock.method(globalThis, 'fetch', async () => json({ image_url: '/new.jpg', model_id: models[0].model_id, model_name: models[0].name }))
+  await assert.rejects(api.generateImage('city', models[0].model_id), /valid chat_id/)
+})
+
+test('chat list pagination and detail preserve server order and legacy nulls', async t => {
+  const api = await loadSource('services/requests.ts')
+  api.rememberSession({ id: 1, email: 'user@example.com' })
+  const chatId = '01900000-0000-7000-8000-000000000001'
+  const chats = [{ id: chatId, title: 'First prompt', created_at: '2020-01-01', updated_at: '2021-01-01' }]
+  const entries = ['first', 'second'].map((prompt, id) => ({ id, prompt, image_url: `/old-${id}.jpg`,
+    created_at: '2020-01-01', model_id: null, model_name: null }))
+  const controller = new AbortController()
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(options.credentials, 'include')
+    assert.equal(options.signal, controller.signal)
+    if (url.endsWith('/chats?limit=50&offset=50')) return json(chats)
+    assert.ok(url.endsWith(`/chats/${chatId}`))
+    return json(entries)
+  })
+  assert.deepEqual(await api.getChats(50, controller.signal), chats)
+  assert.deepEqual(await api.getChat(chatId, controller.signal), entries)
+})
+
+test('chat access errors and malformed data are shown', async t => {
+  const api = await loadSource('services/requests.ts')
+  api.rememberSession({ id: 1, email: 'user@example.com' })
+  const fetch = t.mock.method(globalThis, 'fetch', async () => json({ detail: 'Chat not found.' }, 404))
+  await assert.rejects(api.getChat('missing'), /Chat not found/)
+  fetch.mock.mockImplementation(async () => json([{ id: 1, title: 'Invalid ID' }]))
+  await assert.rejects(api.getChats(), /invalid chat list/)
+  await assert.rejects(api.getChat('bad'), /invalid chat history/)
+})
 
 test('generation failure is shown, not converted to an image', async t => {
   const api = await loadSource('services/requests.ts')
@@ -143,7 +190,7 @@ test('send button is disabled without a valid model even when prompt is nonempty
   assert.match(html, /class="send-btn" disabled=""/)
 })
 
-test('history and restored messages display model names, including legacy fallback', async () => {
+test('sidebar displays one first-prompt title per chat; restored generations keep legacy model fallback', async () => {
   const { ChatHistory } = await loadSource('components/chat/ChatHistory.tsx')
   const { MessageList } = await loadSource('components/chat/MessageList.tsx')
   const entries = [models[1], null].map((model, index) => ({
@@ -151,15 +198,18 @@ test('history and restored messages display model names, including legacy fallba
     model_id: model?.model_id ?? null, model_name: model?.name ?? null,
   }))
   const history = renderToStaticMarkup(createElement(ChatHistory, {
-    entries, selectedId: null, loading: false, error: '', hasMore: false, disabled: false,
+    entries: entries.map((entry, index) => ({ id: String(index), title: `First prompt ${index}`,
+      created_at: entry.created_at, updated_at: entry.created_at })),
+    selectedId: '0', loading: false, error: '', hasMore: false, disabled: false,
     onSelect() {}, onLoadMore() {}, onRetry() {},
   }))
+  assert.match(history, /First prompt 0/)
+  assert.match(history, /First prompt 1/)
+  assert.match(history, /aria-current="true"/)
   const messages = renderToStaticMarkup(createElement(MessageList, {
     messages: entries.map(entry => ({ role: 'assistant', content: 'Result:', image: entry.image_url, modelName: entry.model_name })),
     loading: false,
   }))
-  for (const html of [history, messages]) {
-    assert.match(html, /FLUX-2-klein-4b/)
-    assert.match(html, /Модель неизвестна/)
-  }
+  assert.match(messages, /FLUX-2-klein-4b/)
+  assert.match(messages, /Модель неизвестна/)
 })

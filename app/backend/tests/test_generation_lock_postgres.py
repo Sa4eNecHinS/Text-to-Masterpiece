@@ -20,7 +20,7 @@ from backend.database.generation_lock import (
     GLOBAL_GENERATION_NAMESPACE, GenerationAlreadyInProgress,
     GenerationCapacityExceeded, generation_lock, generation_lock_key,
 )
-from backend.database.models import AIDailyUsage, Base, Guest, Model, RateLimitBucket, User, UserRequest
+from backend.database.models import AIDailyUsage, Base, Chat, Guest, Model, RateLimitBucket, User, UserRequest
 from backend.main import app
 from backend.services import ai_budget, image_generation
 
@@ -351,6 +351,30 @@ async def test_generation_failures_release_lock(client, real_locks, provider, mo
     async with real_locks.factory() as session:
         assert not list(await session.scalars(select(UserRequest)))
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_chat_continuation_with_real_limits_and_postgres(client, real_locks, provider):
+    import json
+    from uuid import UUID
+    await install_owner(client, real_locks, True)
+    requests = provider(lambda request: httpx.Response(200, json={
+        "success": True, "result": {"image": "aW1hZ2U="},
+    }))
+    first = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "first"})
+    assert first.status_code == 200
+    chat_id = first.json()["chat_id"]
+    await refill(real_locks)
+    second = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "second", "chat_id": chat_id})
+    assert second.status_code == 200 and second.json()["chat_id"] == chat_id
+    async with real_locks.factory() as session:
+        assert len(list(await session.scalars(select(Chat)))) == 1
+        assert {row.chat_id for row in await session.scalars(select(UserRequest))} == {UUID(chat_id)}
+    assert [entry["prompt"] for entry in (await client.get(f"/Text-to-Masterpiece/chats/{chat_id}")).json()] == ["first", "second"]
+    assert [json.loads(request.content) for request in requests] == [
+        {"prompt": prompt, "steps": 4} for prompt in ["first", "second"]
+    ]
+    await assert_all_slots_free(real_locks)
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from backend.database.models import Guest, UserRequest
+from backend.database.models import Chat, Guest, UserRequest
 from backend.database.queries import add_user
 
 
@@ -38,9 +38,20 @@ async def test_guest_history_merge_and_session(client, db, provider, action):
     rows = list(db.sync.scalars(select(UserRequest)))
     assert len(rows) == 2 and all(row.user_id == user["id"] and row.guest_id is None for row in rows)
     assert {row.model_id for row in rows} == {"cloudflare/flux-1-schnell", "cloudflare/flux-2-klein-4b"}
+    chats = list(db.sync.scalars(select(Chat)))
+    assert len(chats) == 2 and all(chat.user_id == user["id"] and chat.guest_id is None for chat in chats)
+    assert {row.chat_id for row in rows} == {chat.id for chat in chats}
+    sidebar = (await client.get("/Text-to-Masterpiece/chats")).json()
+    assert len(sidebar) == 2
+    for chat in sidebar:
+        assert len((await client.get(f"/Text-to-Masterpiece/chats/{chat['id']}")).json()) == 1
     assert not list(db.sync.scalars(select(Guest)))
     history = (await client.get("/Text-to-Masterpiece/chat_history")).json()
     assert len(history) == 2 and all(entry["model_name"] for entry in history)
     assert (await client.post("/auth/Text-to-Masterpiece/logout")).status_code == 200
     assert (await client.get("/auth/Text-to-Masterpiece/users/me")).status_code == 401
     assert (await client.get("/Text-to-Masterpiece/chat_history")).json() == []
+    assert (await client.get("/Text-to-Masterpiece/chats")).json() == []
+    assert (await client.get("/Text-to-Masterpiece")).status_code == 200
+    assert (await client.get("/Text-to-Masterpiece/chats")).json() == []
+    assert (await client.get(f"/Text-to-Masterpiece/chats/{chats[0].id}")).status_code == 404

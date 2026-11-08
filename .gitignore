@@ -22,4 +22,5 @@ app/backend/images/
 *.ttf
 *.eot
 app/frontend/src/fonts/
+app/frontend/src/assets/
 

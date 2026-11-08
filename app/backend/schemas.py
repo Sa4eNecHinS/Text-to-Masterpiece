@@ -1,10 +1,12 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from typing import Annotated
 
 
 class GenerateRequest(BaseModel):
+    chat_id: UUID | None = None
     prompt: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
     ]
@@ -20,7 +22,15 @@ class ModelPublic(BaseModel):
     name: str
 
 
+class ChatSummary(BaseModel):
+    id: UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class GenerateResponse(BaseModel):
+    chat_id: UUID
     image_url: str
     model_id: str
     model_name: str
