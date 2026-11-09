@@ -20,5 +20,61 @@ services:
       timeout: 5s
       retries: 10
 
+  backend:
+    build:
+      context: .
+      dockerfile: app/backend/Dockerfile
+
+    image: ttm-backend:local
+    restart: unless-stopped
+
+    env_file:
+      - .env.backend.docker-local
+
+    environment:
+      DB_DRIVER: postgresql+asyncpg
+      DB_USER: ttm
+      DB_PASS: ${TTM_DB_PASSWORD:?Database password required}
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: text_to_masterpiece
+
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: app/backend/Dockerfile
+    image: ttm-backend:local
+
+    restart: "no"
+
+    env_file:
+      - .env.backend.docker-local
+
+    environment:
+      DB_DRIVER: postgresql+asyncpg
+      DB_USER: ttm
+      DB_PASS: ${TTM_DB_PASSWORD:?Database password required}
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: text_to_masterpiece
+
+    command:
+      - alembic
+      - -c
+      - backend/alembic.ini
+      - upgrade
+      - head
+
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   postgres_data:

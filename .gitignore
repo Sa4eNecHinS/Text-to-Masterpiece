@@ -10,7 +10,7 @@ wheels/
 .venv
 __pycache__/
 .env
-.env.docker
+.env.*
 !.env.example
 .python-version
 

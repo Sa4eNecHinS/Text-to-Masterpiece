@@ -1,9 +1,8 @@
-import jwt
 from decimal import Decimal
 from typing import Annotated
-from fastapi import Cookie, Depends, Header, HTTPException, Response, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import uuid7
 
+import jwt
 from backend.core.config import COOKIE_SAMESITE, COOKIE_SECURE, settings
 from backend.core.security import ALGORITHM, SECRET_KEY
 from backend.database.dependencies import get_db
@@ -11,7 +10,8 @@ from backend.database.models import Guest, User
 from backend.database.queries import add_guest, get_guest_by_uuid, get_user_by_id
 from backend.database.rate_limiting import consume_bucket_token
 from backend.database.session import SessionLocal
-from uuid import uuid7
+from fastapi import Cookie, Depends, Header, HTTPException, Response, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 GuestCookie = Annotated[str | None, Cookie(alias="guest_id")]
@@ -19,7 +19,8 @@ AccessToken = Annotated[str | None, Cookie(alias="access_token")]
 
 
 async def get_optional_current_user(
-    session: DbSession, access_token: AccessToken = None,
+    session: DbSession,
+    access_token: AccessToken = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> User | None:
     if authorization is not None:
@@ -85,8 +86,12 @@ async def check_generation_rate_limit(
     async with SessionLocal() as session:
         async with session.begin():
             await consume_bucket_token(
-                session, "ip", ip_address, settings.RATE_LIMIT_IP_CAPACITY,
-                settings.RATE_LIMIT_IP_REFILL_PER_MINUTE, Decimal("60"),
+                session,
+                "ip",
+                ip_address,
+                settings.RATE_LIMIT_IP_CAPACITY,
+                settings.RATE_LIMIT_IP_REFILL_PER_MINUTE,
+                Decimal("60"),
             )
             if user_id is not None:
                 scope, subject_key = "user", str(user_id)
@@ -95,10 +100,16 @@ async def check_generation_rate_limit(
                 resolved_guest_uuid = str(guest.guest_id)
                 scope, subject_key = "guest", resolved_guest_uuid
             await consume_bucket_token(
-                session, scope, subject_key, settings.RATE_LIMIT_USER_CAPACITY,
-                Decimal("1"), settings.RATE_LIMIT_USER_REFILL_SECONDS,
+                session,
+                scope,
+                subject_key,
+                settings.RATE_LIMIT_USER_CAPACITY,
+                Decimal("1"),
+                settings.RATE_LIMIT_USER_REFILL_SECONDS,
             )
     response.raw_headers.extend(
-        (key, value) for key, value in guest_response.raw_headers if key == b"set-cookie"
+        (key, value)
+        for key, value in guest_response.raw_headers
+        if key == b"set-cookie"
     )
     return resolved_guest_uuid
