@@ -28,10 +28,6 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-def include_name(name, type_, parent_names):
-    if type_ == "schema":
-        return name == "tests"
-    return True
 
 
 def run_migrations_offline() -> None:
@@ -62,8 +58,8 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        include_schemas=True,
-        include_name=include_name,
+        compare_type=True,
+        compare_server_default=True,
     )
 
     with context.begin_transaction():

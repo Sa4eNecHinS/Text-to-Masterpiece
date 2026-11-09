@@ -27,7 +27,6 @@ class Base(DeclarativeBase):
 
 class Guest(Base):
     __tablename__ = "guests"
-    __table_args__ = {"schema": "tests"}
 
     id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
     guest_id: Mapped[UUID] = mapped_column(
@@ -40,7 +39,6 @@ class Guest(Base):
 
 class Model(Base):
     __tablename__ = "models"
-    __table_args__ = {"schema": "tests"}
 
     model_id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -55,7 +53,6 @@ class AIDailyUsage(Base):
             "used_neurons >= 0",
             name="ck_ai_daily_usage_non_negative",
         ),
-        {"schema": "tests"},
     )
 
     usage_date: Mapped[date] = mapped_column(
@@ -82,7 +79,6 @@ class RateLimitBucket(Base):
             "scope IN ('user', 'guest', 'ip')",
             name="ck_rate_limit_buckets_scope",
         ),
-        {"schema": "tests"},
     )
 
     scope: Mapped[str] = mapped_column(
@@ -116,7 +112,6 @@ class Chat(Base):
             "(user_id IS NULL AND guest_id IS NOT NULL)",
             name="chat_has_one_owner",
         ),
-        {"schema": "tests"},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -126,13 +121,13 @@ class Chat(Base):
 
     user_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("tests.users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
     )
 
     guest_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("tests.guests.id", ondelete="CASCADE"),
+        ForeignKey("guests.id", ondelete="CASCADE"),
         nullable=True,
     )
 
@@ -151,7 +146,6 @@ class Chat(Base):
 
 class User(Base):
     __tablename__ = "users"
-    __table_args__ = {"schema": "tests"}
 
     id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
     email: Mapped[str] = mapped_column(nullable=False, unique=True)
@@ -173,15 +167,14 @@ class UserRequest(Base):
             "(user_id IS NULL AND guest_id IS NOT NULL)",
             name="request_has_one_owner",
         ),
-        {"schema": "tests"},
     )
 
     id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
     user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("tests.users.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
     guest_id: Mapped[int | None] = mapped_column(
-        ForeignKey("tests.guests.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("guests.id", ondelete="CASCADE"), nullable=True
     )
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     object_key: Mapped[str] = mapped_column(
@@ -190,11 +183,11 @@ class UserRequest(Base):
     )
     model_id: Mapped[str | None] = mapped_column(
         Text,
-        ForeignKey("tests.models.model_id", name="fk_users_requests_model_id"),
+        ForeignKey("models.model_id", name="fk_users_requests_model_id"),
         nullable=True,
     )
     chat_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("tests.chats.id", ondelete="CASCADE"),
+        ForeignKey("chats.id", ondelete="CASCADE"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

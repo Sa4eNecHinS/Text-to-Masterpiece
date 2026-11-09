@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ttm
+      POSTGRES_PASSWORD: ${TTM_DB_PASSWORD:?Database password required}
+      POSTGRES_DB: text_to_masterpiece
+
+    ports:
+      - "127.0.0.1:5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
