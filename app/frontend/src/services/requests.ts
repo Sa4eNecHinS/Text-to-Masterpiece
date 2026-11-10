@@ -1,4 +1,7 @@
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL ??
+  (import.meta.env.DEV ? 'http://localhost:8080' : '/api')
+
 
 export type ImageModel = { model_id: string; name: string }
 export type GenerateResponse = { chat_id: string; generation_id: number; model_id: string; model_name: string }

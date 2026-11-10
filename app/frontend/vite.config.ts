@@ -7,10 +7,6 @@ import path from "path"
 export default defineConfig({
   server: {
     proxy: {
-      "/api": {
-        target: "http://localhost:8000/Text-to-Masterpiece",
-        changeOrigin: true,
-      }
     }
   },
   plugins: [react()],

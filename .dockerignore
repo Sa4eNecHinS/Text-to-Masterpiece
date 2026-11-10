@@ -1,4 +1,4 @@
-
+# backend
 .git/
 **/.venv/
 **/__pycache__/
@@ -15,3 +15,11 @@ app/frontend/node_modules/
 app/frontend/dist/
 
 app/backend/images/
+
+
+# frontend
+node_modules
+dist
+.git
+.env*
+*.log

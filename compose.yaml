@@ -76,5 +76,20 @@ services:
       db:
         condition: service_healthy
 
+  nginx:
+    build:
+      context: ./app/frontend 
+      dockerfile: Dockerfile
+
+    image: ttm-nginx:local
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:3000:80"
+
+    depends_on:
+      backend:
+        condition: service_started
+
 volumes:
   postgres_data:
