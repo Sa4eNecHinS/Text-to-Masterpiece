@@ -1,0 +1,94 @@
+x-backend-env: &backend-env
+  DB_DRIVER: postgresql+asyncpg
+  DB_USER: ttm
+  DB_PASS: ${TTM_DB_PASSWORD:?TTM_DB_PASSWORD is required}
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: text_to_masterpiece
+
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+  ALGORITHM: ${ALGORITHM:?ALGORITHM is required}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-20}
+  IMAGE_MODEL: ${IMAGE_MODEL:?IMAGE_MODEL is required}
+  IMAGE_STORAGE_DIR: ${IMAGE_STORAGE_DIR:?IMAGE_STORAGE_DIR is required}
+  CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:?CLOUDFLARE_ACCOUNT_ID is required}
+  CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required}
+
+  B2_ENDPOINT: ${B2_ENDPOINT:?B2_ENDPOINT is required}
+  B2_REGION: ${B2_REGION:?B2_REGION is required}
+  B2_BUCKET_NAME: ${B2_BUCKET_NAME:?B2_BUCKET_NAME is required}
+  B2_KEY_ID: ${B2_KEY_ID:?B2_KEY_ID is required}
+  B2_APPLICATION_KEY: ${B2_APPLICATION_KEY:?B2_APPLICATION_KEY is required}
+
+  # TLS terminates at Netrun's ingress. The browser still sees HTTPS.
+  COOKIE_SECURE: "true"
+  COOKIE_SAMESITE: lax
+
+  # Keep production rate limits and budget explicitly configurable.
+  # These are fallback values; override in Netrun Secrets if your local
+  # settings differ (especially RATE_LIMIT_USER_REFILL_SECONDS).
+  RATE_LIMIT_USER_CAPACITY: ${RATE_LIMIT_USER_CAPACITY:-1}
+  RATE_LIMIT_USER_REFILL_SECONDS: ${RATE_LIMIT_USER_REFILL_SECONDS:-10}
+  RATE_LIMIT_IP_CAPACITY: ${RATE_LIMIT_IP_CAPACITY:-5}
+  RATE_LIMIT_IP_REFILL_PER_MINUTE: ${RATE_LIMIT_IP_REFILL_PER_MINUTE:-45}
+  AI_MAX_CONCURRENT_GENERATIONS: ${AI_MAX_CONCURRENT_GENERATIONS:-5}
+  AI_DAILY_NEURON_LIMIT: ${AI_DAILY_NEURON_LIMIT:-9000}
+  AI_NEURON_COST_FLUX_1_SCHNELL: ${AI_NEURON_COST_FLUX_1_SCHNELL:-65}
+  AI_NEURON_COST_FLUX_2_KLEIN_4B: ${AI_NEURON_COST_FLUX_2_KLEIN_4B:-110}
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ttm
+      POSTGRES_PASSWORD: ${TTM_DB_PASSWORD:?TTM_DB_PASSWORD is required}
+      POSTGRES_DB: text_to_masterpiece
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
+    # No public port: db is available only on the Compose network.
+
+  migrate:
+    build:
+      context: .
+      dockerfile: app/backend/Dockerfile
+    image: ttm-backend:prod
+    restart: "no"
+    environment: *backend-env
+    command: ["alembic", "-c", "backend/alembic.ini", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: .
+      dockerfile: app/backend/Dockerfile
+    image: ttm-backend:prod
+    restart: unless-stopped
+    environment: *backend-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  nginx:
+    build:
+      context: ./app/frontend
+      dockerfile: Dockerfile
+    image: ttm-nginx:prod
+    restart: unless-stopped
+    ports:
+      # Only public ingress. Confirm the published port with Netrun's UI.
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  postgres_data:

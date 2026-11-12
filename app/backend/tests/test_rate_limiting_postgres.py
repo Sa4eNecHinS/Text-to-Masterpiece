@@ -100,7 +100,7 @@ async def test_first_request_then_refusal_and_rollback(client, real_rate, provid
     assert next(row.tokens for row in before if row.scope == "ip") == D("4")
     second = await client.post("/Text-to-Masterpiece/generate", json=body, headers=headers)
     assert second.status_code == 429
-    assert 1 <= int(second.headers["retry-after"]) <= 15
+    assert 1 <= int(second.headers["retry-after"]) <= 7
     # IP's tentative decrement and timestamp change have both rolled back.
     assert await bucket_rows(real_rate) == before
     assert len(requests) == 1
@@ -129,7 +129,7 @@ async def test_refilled_owner_can_generate_again(client, real_rate, provider):
     assert (await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})).status_code == 200
     async with real_rate.factory.begin() as session:
         await session.execute(update(RateLimitBucket).where(RateLimitBucket.scope == "guest").values(
-            updated_at=func.statement_timestamp() - text("INTERVAL '16 seconds'"),
+            updated_at=func.statement_timestamp() - text("INTERVAL '7 seconds'"),
         ))
     assert (await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})).status_code == 200
     assert len(requests) == 2
@@ -141,7 +141,7 @@ async def test_ip_refusal_preserves_owner_and_does_not_reserve_neurons(client, r
     scope, key = await install_owner(client, real_rate, True)
     # Exhaust a shared IP independently of this owner's unused bucket.
     async with real_rate.factory.begin() as session:
-        await consume_bucket_token(session, "user", key, 2, D("1"), D("15"))
+        await consume_bucket_token(session, "user", key, 2, D("1"), D("7"))
         session.add(RateLimitBucket(scope="ip", subject_key="127.0.0.1", tokens=D("0"),
                                     updated_at=func.statement_timestamp()))
     before = await bucket_rows(real_rate)
@@ -197,12 +197,12 @@ async def test_refill_saturates_and_refusal_does_not_modify_bucket(rate_db):
         assert await consume_bucket_token(session, "ip", "address", 5, D("45"), D("60")) == D("4")
     # A fresh single-token bucket starts with its first token already spent.
     async with rate_db.factory.begin() as session:
-        assert await consume_bucket_token(session, "user", "1", 1, D("1"), D("15")) == D("0")
+        assert await consume_bucket_token(session, "user", "1", 1, D("1"), D("7")) == D("0")
     before = await bucket_rows(rate_db)
     with pytest.raises(RateLimitExceeded) as exc:
         async with rate_db.factory.begin() as session:
-            await consume_bucket_token(session, "user", "1", 1, D("1"), D("15"))
-    assert 1 <= exc.value.retry_after <= 15
+            await consume_bucket_token(session, "user", "1", 1, D("1"), D("7"))
+    assert 1 <= exc.value.retry_after <= 7
     assert await bucket_rows(rate_db) == before
 
 

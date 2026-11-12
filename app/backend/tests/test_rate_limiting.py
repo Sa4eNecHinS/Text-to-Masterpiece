@@ -31,7 +31,7 @@ def test_capacity_must_fit_whole_tokens(monkeypatch, field, value):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error,status", [
-    (RateLimitExceeded(15), 429),
+    (RateLimitExceeded(7), 429),
     (OperationalError("rate limiter", {}, Exception("unavailable")), 503),
 ])
 async def test_rate_failure_prevents_neurons_and_provider(client, monkeypatch, provider, error, status):
@@ -40,7 +40,7 @@ async def test_rate_failure_prevents_neurons_and_provider(client, monkeypatch, p
     response = await client.post("/Text-to-Masterpiece/generate", json={"prompt": "city"})
     assert response.status_code == status
     if status == 429:
-        assert response.headers["retry-after"] == "15"
+        assert response.headers["retry-after"] == "7"
     images.reserve_generation_neurons.assert_not_awaited()
     assert not requests
 

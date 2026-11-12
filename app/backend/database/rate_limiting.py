@@ -40,7 +40,7 @@ async def consume_bucket_token(
     elapsed = func.greatest(func.extract("epoch", now - bucket.c.updated_at), 0)
     refill = bindparam("refill_tokens", type_=Numeric())
     period = bindparam("refill_seconds", type_=Numeric())
-    # Multiply before dividing to avoid rounding 1/15 to a Python rate.
+    # Multiply before dividing to avoid rounding the refill rate in Python.
     available = func.least(capacity, bucket.c.tokens + elapsed * refill / period)
     statement = (
         insert(bucket)
