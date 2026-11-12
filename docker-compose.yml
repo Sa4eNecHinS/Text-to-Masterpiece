@@ -18,13 +18,9 @@ x-backend-env: &backend-env
   B2_KEY_ID: ${B2_KEY_ID:?B2_KEY_ID is required}
   B2_APPLICATION_KEY: ${B2_APPLICATION_KEY:?B2_APPLICATION_KEY is required}
 
-  # TLS terminates at Netrun's ingress. The browser still sees HTTPS.
   COOKIE_SECURE: "true"
   COOKIE_SAMESITE: lax
 
-  # Keep production rate limits and budget explicitly configurable.
-  # These are fallback values; override in Netrun Secrets if your local
-  # settings differ (especially RATE_LIMIT_USER_REFILL_SECONDS).
   RATE_LIMIT_USER_CAPACITY: ${RATE_LIMIT_USER_CAPACITY:-1}
   RATE_LIMIT_USER_REFILL_SECONDS: ${RATE_LIMIT_USER_REFILL_SECONDS:-10}
   RATE_LIMIT_IP_CAPACITY: ${RATE_LIMIT_IP_CAPACITY:-5}
@@ -45,12 +41,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       start_period: 20s
       retries: 12
-    # No public port: db is available only on the Compose network.
 
   migrate:
     build:
@@ -82,7 +77,6 @@ services:
     image: ttm-nginx:prod
     restart: unless-stopped
     ports:
-      # Only public ingress. Confirm the published port with Netrun's UI.
       - "80:80"
     depends_on:
       backend:
