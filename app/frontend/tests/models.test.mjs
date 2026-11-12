@@ -13,7 +13,15 @@ async function loadSource(path) {
     compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   })
   const privateImageStub = `data:text/javascript;base64,${Buffer.from('export function PrivateImage() { return null }').toString('base64')}`
+  const modelSelectSource = path.endsWith('ChatInput.tsx')
+    ? await readFile(new URL('../src/components/chat/ModelSelect.tsx', import.meta.url), 'utf8') : ''
+  const modelSelectCode = ts.transpileModule(modelSelectSource, {
+    compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText.replace(/from ["'](react(?:\/[^"']+)?)["']/g, (_, specifier) => `from ${JSON.stringify(import.meta.resolve(specifier))}`)
+  const modelSelectModule = `data:text/javascript;base64,${Buffer.from(modelSelectCode).toString('base64')}`
   const code = outputText.replaceAll('import.meta.env.VITE_API_URL', 'undefined')
+    .replaceAll('import.meta.env.DEV', 'true')
+    .replace(/from ['"]\.\/ModelSelect['"]/g, `from ${JSON.stringify(modelSelectModule)}`)
     .replace('"@/components/chat/PrivateImage"', JSON.stringify(privateImageStub))
     .replace("'@/components/chat/PrivateImage'", JSON.stringify(privateImageStub))
     .replace(/from ["'](react(?:\/[^"']+)?)["']/g, (_, specifier) => `from ${JSON.stringify(import.meta.resolve(specifier))}`)
@@ -202,7 +210,7 @@ test('model selector displays server names and the selected model', async () => 
     models, value: models[1].model_id, loading: false, error: '', disabled: false,
     onChange() {}, onRetry() {},
   }))
-  assert.match(html, /value="cloudflare\/flux-2-klein-4b" selected=""/)
+  assert.match(html, /aria-checked="true"[^>]*><span>FLUX-2-klein-4b/)
   assert.match(html, /FLUX\.1-schnell/)
   assert.doesNotMatch(html, /disabled=""/)
 })
@@ -217,7 +225,7 @@ for (const state of [
     const html = renderToStaticMarkup(createElement(ModelSelect, {
       models: [], value: '', disabled: false, onChange() {}, onRetry() {}, ...state,
     }))
-    assert.match(html, /disabled=""/)
+    assert.doesNotMatch(html, /role="menuitemradio"/)
     assert.match(html, state.message)
   })
 }
@@ -227,7 +235,46 @@ test('send button is disabled without a valid model even when prompt is nonempty
   const html = renderToStaticMarkup(createElement(ChatInput, {
     value: 'city', disabled: true, onChange() {}, onSend() {},
   }))
-  assert.match(html, /class="send-btn" disabled=""/)
+  assert.match(html, /class="send-btn"[^>]*disabled=""/)
+})
+
+test('composer hides the model list behind + and never sends /model as a prompt', async () => {
+  const { ChatInput } = await loadSource('components/chat/ChatInput.tsx')
+  const props = {
+    onChange() {}, onSend() {},
+    modelSelect: { models, value: models[0].model_id, loading: false, error: '', disabled: false,
+      onChange() {}, onRetry() {} },
+  }
+  const html = renderToStaticMarkup(createElement(ChatInput, { ...props, value: '/model' }))
+  assert.match(html, /aria-label="Choose model"/)
+  assert.match(html, /aria-expanded="false"/)
+  assert.match(html, /title="Model: FLUX\.1-schnell"/)
+  assert.doesNotMatch(html, /role="menu"/)
+  assert.match(html, /class="send-btn"[^>]*disabled=""/)
+  const prompt = renderToStaticMarkup(createElement(ChatInput, { ...props, value: 'city' }))
+  assert.doesNotMatch(prompt, /disabled=""/)
+})
+
+test('slash suggestions filter the single /model command and prevent sending partial commands', async () => {
+  const { ChatInput } = await loadSource('components/chat/ChatInput.tsx')
+  const props = {
+    onChange() {}, onSend() {},
+    modelSelect: { models, value: models[0].model_id, loading: false, error: '', disabled: false,
+      onChange() {}, onRetry() {} },
+  }
+  for (const value of ['/', '/m', '/mod', '/MODEL']) {
+    const html = renderToStaticMarkup(createElement(ChatInput, { ...props, value }))
+    assert.match(html, /role="listbox" aria-label="Commands"/)
+    assert.match(html, /role="option" aria-selected="true"/)
+    assert.match(html, /<strong>\/model<\/strong>/)
+    assert.match(html, /class="send-btn"[^>]*disabled=""/)
+  }
+  for (const value of ['city', '/unknown', '/model city', 'city /']) {
+    const html = renderToStaticMarkup(createElement(ChatInput, { ...props, value }))
+    assert.doesNotMatch(html, /role="listbox"/)
+  }
+  const busy = renderToStaticMarkup(createElement(ChatInput, { ...props, value: '/', loading: true }))
+  assert.doesNotMatch(busy, /role="listbox"/)
 })
 
 test('sidebar displays one first-prompt title per chat; restored generations keep legacy model fallback', async () => {

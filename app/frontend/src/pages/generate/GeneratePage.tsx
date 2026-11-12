@@ -7,7 +7,7 @@ import type { Message } from "@/types/message";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { MessageList } from "@/components/chat/MessageList";
-import { ModelSelect } from "@/components/chat/ModelSelect";
+import type { ModelSelectProps } from "@/components/chat/ModelSelect";
 
 export default function GeneratePage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -54,9 +54,11 @@ export default function GeneratePage() {
   }, [modelsRevision]);
 
   const validModel = !modelsLoading && !modelsError && models.some(model => model.model_id === modelId);
-  const modelSelector = <ModelSelect models={models} value={modelId} loading={modelsLoading}
-    error={modelsError} disabled={loading} onChange={setModelId}
-    onRetry={() => setModelsRevision(value => value + 1)} />;
+  const modelSelect: ModelSelectProps = {
+    models, value: modelId, loading: modelsLoading, error: modelsError,
+    disabled: loading, onChange: setModelId,
+    onRetry: () => setModelsRevision(value => value + 1),
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -222,8 +224,8 @@ export default function GeneratePage() {
           
           {!isChatMode && (
             <div className="input-transition-wrapper centered">
-              {modelSelector}
-              <ChatInput 
+              <ChatInput
+                modelSelect={modelSelect}
                 value={input} 
                 onChange={setInput} 
                 onSend={handleSend} 
@@ -246,8 +248,8 @@ export default function GeneratePage() {
 
       {isChatMode && (
         <div className="input-transition-wrapper bottom">
-          {modelSelector}
-          <ChatInput 
+          <ChatInput
+            modelSelect={modelSelect}
             value={input} 
             onChange={setInput} 
             onSend={handleSend} 
