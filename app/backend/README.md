@@ -170,7 +170,7 @@ cookie-запросов либо внедрить проверяемый CSRF-т
 проверку; существующий GET главной страницы создаёт guest cookie. Не добавляйте
 на GET бизнес-операции, изменяющие пользовательские данные.
 
-### Контракт будущего Cloudflare proxy (Worker здесь не реализован)
+### Контракт Cloudflare proxy
 
 Браузер обращается к HTTPS-домену frontend по `/api/*`. Worker должен:
 
@@ -195,6 +195,18 @@ cookie-запросов либо внедрить проверяемый CSRF-т
 rate limit может видеть общий адрес прокси). Прямой доступ к Render остаётся
 возможен; allowlist не аутентифицирует Worker и не ограничивает non-browser
 клиентов. Ограничение direct ingress при необходимости настраивается отдельно.
+
+Worker реализован в `frontend/worker/index.ts`. Его upstream зафиксирован на
+`https://ttm-backend-du5g.onrender.com`: значение не берётся из URL, query или
+заголовков клиента. Он снимает ровно префикс `/api`, поэтому frontend-запрос
+`GET /api/images/{generation_id}` приходит в существующий FastAPI-маршрут
+`GET /images/{generation_id}`. Все API-ответы помечаются `private, no-store`.
+Локальный Vite dev proxy и nginx используют такое же преобразование пути.
+
+Для production задайте Render-переменные `COOKIE_SECURE=true`,
+`COOKIE_SAMESITE=lax` и добавьте точный Cloudflare frontend origin (без пути и
+завершающего `/`) в `CORS_ORIGINS`. Иначе безопасные POST-запросы через Worker
+будут корректно отклонены Origin/CSRF middleware с 403.
 
 ## Чаты и история
 

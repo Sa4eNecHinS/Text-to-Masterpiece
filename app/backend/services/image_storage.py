@@ -7,10 +7,9 @@ from typing import AsyncIterator, Protocol
 
 import anyio
 import boto3
+from backend.core.config import settings
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
-
-from backend.core.config import settings
 
 
 class StorageError(Exception):
@@ -105,7 +104,6 @@ class S3ImageStorage:
             Key=key,
             Body=data,
             ContentType=content_type,
-            IfNoneMatch="*",
         )
 
     async def download(self, key: str) -> StoredImage:
