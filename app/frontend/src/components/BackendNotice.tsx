@@ -3,9 +3,9 @@ import { useBackendReadiness } from './useBackendReadiness'
 
 export function BackendNotice() {
   const { status } = useBackendReadiness()
-  if (status !== 'starting' && status !== 'unavailable') return null
+  if (status !== 'checking' && status !== 'starting' && status !== 'unavailable') return null
   return <aside className="backend-notice" role="status" aria-live="polite">
-    {status === 'starting' ? <>
+    {status !== 'unavailable' ? <>
       <strong>Starting server…</strong>
       <span>The server is waking up. You can continue preparing your prompt.</span>
     </> : <>

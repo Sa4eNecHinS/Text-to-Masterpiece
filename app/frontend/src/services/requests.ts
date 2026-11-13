@@ -7,12 +7,25 @@ export type GenerateResponse = { chat_id: string; generation_id: number; model_i
 export type ChatSummary = { id: string; title: string; created_at: string; updated_at: string }
 
 export async function getModels(signal?: AbortSignal): Promise<ImageModel[]> {
-  const response = await readAPI(`${API_BASE_URL}/Text-to-Masterpiece/models`, { signal })
+  const response = await readAPI(`${API_BASE_URL}/Text-to-Masterpiece/models`, { signal }, readModelCatalogue)
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load models (HTTP ${response.status}).`)
-  const data: unknown = await response.json()
+  return readModelCatalogue(response)
+}
+
+class InvalidCatalogueError extends Error {
+  constructor() { super('The server returned an invalid model catalogue.') }
+}
+async function readModelCatalogue(response: Response): Promise<ImageModel[]> {
+  let data: unknown
+  try {
+    data = await response.json()
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new InvalidCatalogueError()
+    throw error // Interrupted/aborted bodies are network/timeout failures.
+  }
   if (!Array.isArray(data) || !data.every(model => model && typeof model.model_id === 'string'
     && model.model_id.trim() && typeof model.name === 'string' && model.name.trim())) {
-    throw new Error('The server returned an invalid model catalogue.')
+    throw new InvalidCatalogueError()
   }
   return data as ImageModel[]
 }
@@ -299,39 +312,72 @@ class ProbeHTTPError extends Error {
     this.status = status
   }
 }
+const RECOVERY_BUDGET_MS = 120_000
+const READ_TIMEOUT_MS = 65_000 // Allow Render's 50–60s cold start in a single request.
+function transientStatus(status: number): boolean {
+  return [502, 503, 504, 530].includes(status) || (status >= 520 && status <= 529)
+}
 function transientFailure(error: unknown): boolean {
-  return error instanceof TypeError
-    || (error instanceof Error && error.name === 'TimeoutError')
-    || (error instanceof ProbeHTTPError && [502, 503, 504].includes(error.status))
+  return error instanceof TypeError || error instanceof InvalidCatalogueError
+    || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))
+    || (error instanceof ProbeHTTPError && transientStatus(error.status))
+}
+function failureReason(error: unknown): string {
+  if (error instanceof ProbeHTTPError) return `http-${error.status}`
+  if (error instanceof InvalidCatalogueError) return 'invalid-catalogue'
+  if (error instanceof TypeError) return 'network'
+  if (error instanceof Error && error.name === 'TimeoutError') return 'timeout'
+  if (error instanceof Error && error.name === 'AbortError') return 'aborted'
+  return 'unexpected-error'
+}
+function readinessLog(event: string, fields: Record<string, string | number> = {}) {
+  // Only controlled metadata: never URLs, response bodies, Error.message,
+  // cookies, credentials or headers. Vite removes this branch in production.
+  if (import.meta.env.DEV) console.debug('[backend-readiness]', event, fields)
 }
 function unavailableError() { return new Error('Server temporarily unavailable') }
+async function retryDelay(attempt: number, deadline: number, phase: string, reason: string) {
+  const delayMs = Math.max(0, Math.min(deadline - Date.now(), Math.min(10_000, 1000 * 2 ** Math.min(attempt, 4)) * (0.8 + Math.random() * 0.4)))
+  readinessLog('retry', { phase, reason, delayMs, remainingMs: Math.max(0, deadline - Date.now()) })
+  if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs))
+}
 
-function beginReadiness(manual = false, deadline = Date.now() + 120_000): Promise<void> {
+function beginReadiness(manual = false, deadline = Date.now() + RECOVERY_BUDGET_MS): Promise<void> {
   if (recoveryCycle) return recoveryCycle
   if (backendState.status === 'unavailable' && !manual) return Promise.reject(unavailableError())
   publishBackend('checking')
+  const started = Date.now()
+  readinessLog('cycle-start', { budgetMs: Math.max(0, deadline - started) })
   recoveryCycle = (async () => {
     let attempt = 0
     while (Date.now() < deadline) {
+      const requestStarted = Date.now()
+      let status = 0
       try {
         const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/models`, {
-          signal: AbortSignal.timeout(Math.max(1, Math.min(10_000, deadline - Date.now()))),
+          signal: AbortSignal.timeout(Math.max(1, Math.min(READ_TIMEOUT_MS, deadline - Date.now()))),
         })
-        if (!response.ok) throw new ProbeHTTPError(response.status)
+        status = response.status
+        if (!response.ok) throw new ProbeHTTPError(status)
+        await readModelCatalogue(response) // Includes body read/JSON validation in the timeout.
+        if (Date.now() >= deadline) throw new DOMException('Readiness budget exhausted', 'TimeoutError')
+        readinessLog('probe-end', { attempt, status, durationMs: Date.now() - requestStarted })
+        readinessLog('cycle-ready', { elapsedMs: Date.now() - started })
         publishBackend('ready', manual)
         return
       } catch (error) {
+        const reason = failureReason(error)
+        readinessLog('probe-end', { attempt, status, reason, durationMs: Date.now() - requestStarted })
         if (!transientFailure(error)) {
-          publishBackend('error') // 401/403 and other permanent errors are not cold start.
+          readinessLog('cycle-error', { reason, elapsedMs: Date.now() - started })
+          publishBackend('error') // In particular, HTTP 500 is an application error, not cold start.
           throw error
         }
         publishBackend('starting')
-        const remaining = deadline - Date.now()
-        if (remaining <= 0) break
-        const delay = Math.min(remaining, Math.min(10_000, 1000 * 2 ** attempt++) * (0.8 + Math.random() * 0.4))
-        await new Promise(resolve => setTimeout(resolve, delay))
+        await retryDelay(attempt++, deadline, 'probe', reason)
       }
     }
+    readinessLog('cycle-unavailable', { reason: 'budget-exhausted', elapsedMs: Date.now() - started })
     publishBackend('unavailable')
     throw unavailableError()
   })().finally(() => { recoveryCycle = undefined })
@@ -363,29 +409,41 @@ async function waitForReadiness(signal?: AbortSignal): Promise<void> {
   await abortable(startBackendReadiness(), signal)
 }
 
-async function readAPI(url: string, options: RequestInit = {}): Promise<Response> {
+async function readAPI(url: string, options: RequestInit = {}, validate?: (response: Response) => Promise<unknown>): Promise<Response> {
   // Low-level API callers retain single-request semantics unless the app has
   // explicitly enabled recovery. AuthProvider enables it before passive effects.
   options.signal?.throwIfAborted()
   if (!recoveryEnabled) return fetch(url, options)
   const signal = options.signal ?? undefined
-  const deadline = Date.now() + 120_000
+  const started = Date.now()
+  const deadline = started + RECOVERY_BUDGET_MS
+  const resource = url.endsWith('/models') ? 'models' : url.endsWith('/users/me') ? 'session' : 'history'
   await waitForReadiness(signal)
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; Date.now() < deadline; attempt++) {
     signal?.throwIfAborted()
-    if (Date.now() >= deadline) throw unavailableError()
+    const requestStarted = Date.now()
+    let status = 0
     try {
-      const timeout = AbortSignal.timeout(Math.max(1, Math.min(10_000, deadline - Date.now())))
+      const timeout = AbortSignal.timeout(Math.max(1, Math.min(READ_TIMEOUT_MS, deadline - Date.now())))
       const response = await fetch(url, { ...options, signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
-      if ([502, 503, 504].includes(response.status)) throw new ProbeHTTPError(response.status)
+      status = response.status
+      if (transientStatus(status)) throw new ProbeHTTPError(status)
+      if (response.ok && validate) await validate(response.clone())
+      readinessLog('read-end', { resource, attempt, status, durationMs: Date.now() - requestStarted, elapsedMs: Date.now() - started })
       return response
     } catch (error) {
+      const reason = failureReason(error)
+      readinessLog('read-end', { resource, attempt, status, reason, durationMs: Date.now() - requestStarted, elapsedMs: Date.now() - started })
       if (signal?.aborted || !transientFailure(error)) throw error
-      if (attempt === 1) {
-        publishBackend('unavailable')
-        throw unavailableError()
-      }
-      await abortable(beginReadiness(false, deadline), signal)
+      publishBackend('starting')
+      // A failed replay is not proof that the whole 120s budget is exhausted.
+      // Rate-limit even when the readiness probe itself returns immediately.
+      await abortable(retryDelay(attempt, deadline, `read/${resource}`, reason), signal)
+      if (Date.now() < deadline) await abortable(beginReadiness(false, deadline), signal)
     }
   }
+  signal?.throwIfAborted()
+  readinessLog('read-unavailable', { resource, reason: 'budget-exhausted', elapsedMs: Date.now() - started })
+  publishBackend('unavailable')
+  throw unavailableError()
 }

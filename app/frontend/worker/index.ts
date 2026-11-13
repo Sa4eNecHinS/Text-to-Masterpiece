@@ -45,12 +45,24 @@ async function proxy(request: Request): Promise<Response> {
     return new Response('Not found', { status: 404 })
   }
 
-  const upstream = await fetch(target, {
-    method: request.method,
-    headers: proxyHeaders(request),
-    body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
-    redirect: 'manual',
-  })
+  let upstream: Response
+  try {
+    // Do not impose a short upstream timeout: Render can take 50–60s to wake.
+    // No proxy retries, especially for POSTs with an ambiguous server outcome.
+    upstream = await fetch(target, {
+      method: request.method,
+      headers: proxyHeaders(request),
+      body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
+      redirect: 'manual',
+    })
+  } catch {
+    // Return a controlled, retryable gateway response instead of an unhandled
+    // Worker exception/HTML error page. Never expose exception text or headers.
+    return Response.json({ detail: 'Backend connection unavailable. Please try again shortly.' }, {
+      status: 502,
+      headers: { 'cache-control': 'private, no-store' },
+    })
+  }
 
   const responseHeaders = new Headers(upstream.headers)
   const setCookies = upstream.headers.getSetCookie()

@@ -65,6 +65,70 @@ test('maps private image requests to GET /images/{generation_id} without a body'
   assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [1, 2, 3])
 })
 
+test('a 50-second upstream response is not cut off by a Worker timeout', async t => {
+  const { default: worker } = await loadWorker()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 })
+  const fetch = t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.equal(init.signal, undefined)
+    await new Promise(resolve => setTimeout(resolve, 50_000))
+    return Response.json([{ model_id: 'model', name: 'Model' }])
+  })
+  let settled = false
+  const pending = worker.fetch(new Request('https://app.example/api/Text-to-Masterpiece/models'))
+    .then(response => { settled = true; return response })
+  t.mock.timers.tick(49_000)
+  await Promise.resolve()
+  assert.equal(settled, false)
+  t.mock.timers.tick(1000)
+  const response = await pending
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), [{ model_id: 'model', name: 'Model' }])
+  assert.equal(fetch.mock.callCount(), 1)
+})
+
+for (const method of ['GET', 'POST']) {
+  test(`upstream network exceptions return a sanitized uncached 502 without replaying ${method}`, async t => {
+    const { default: worker } = await loadWorker()
+    const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('secret-upstream-diagnostic') })
+    const response = await worker.fetch(new Request('https://app.example/api/Text-to-Masterpiece/generate', { method }))
+    assert.equal(response.status, 502)
+    assert.equal(response.headers.get('cache-control'), 'private, no-store')
+    assert.match(response.headers.get('content-type'), /application\/json/)
+    assert.equal(response.headers.has('set-cookie'), false)
+    assert.deepEqual(await response.json(), { detail: 'Backend connection unavailable. Please try again shortly.' })
+    assert.equal(fetch.mock.callCount(), 1)
+  })
+}
+
+test('proxy preserves a pending response stream and multiple Set-Cookie fields without buffering', async t => {
+  const { default: worker } = await loadWorker()
+  let controller
+  const stream = new ReadableStream({ start(value) { controller = value } })
+  const headers = new Headers()
+  headers.append('set-cookie', 'access_token=one; Path=/; HttpOnly; Secure; SameSite=Lax')
+  headers.append('set-cookie', 'guest_id=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax')
+  t.mock.method(globalThis, 'fetch', async () => new Response(stream, { headers }))
+  const response = await worker.fetch(new Request('https://app.example/api/images/1'))
+  assert.equal(response.body, stream)
+  assert.equal(response.headers.getSetCookie().length, 2)
+  const reader = response.body.getReader()
+  controller.enqueue(new Uint8Array([1, 2, 3]))
+  assert.deepEqual([...(await reader.read()).value], [1, 2, 3])
+  controller.close()
+  assert.equal((await reader.read()).done, true)
+})
+
+for (const status of [500, 502, 503, 504, 520, 522, 524]) {
+  test(`proxy passes upstream HTTP ${status} through unchanged without retrying`, async t => {
+    const { default: worker } = await loadWorker()
+    const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('upstream', { status }))
+    const response = await worker.fetch(new Request('https://app.example/api/Text-to-Masterpiece/models'))
+    assert.equal(response.status, status)
+    assert.equal(await response.text(), 'upstream')
+    assert.equal(fetch.mock.callCount(), 1)
+  })
+}
+
 test('does not act as an open proxy or accept lookalike API prefixes', async t => {
   const { default: worker } = await loadWorker()
   const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response())
