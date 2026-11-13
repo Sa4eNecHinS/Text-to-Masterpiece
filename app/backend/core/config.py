@@ -1,11 +1,13 @@
+import json
 import os
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
-from pydantic import Field, HttpUrl, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, HttpUrl, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -33,6 +35,39 @@ class Settings(BaseSettings):
         env_file=BACKEND_DIR / ".env", extra="ignore", validate_default=True,
         hide_input_in_errors=True,
     )
+
+    # Empty by default: production stays closed until its browser origin is known.
+    # NoDecode lets us support an explicitly empty env value as well as JSON [].
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def validate_cors_origins(cls, value):
+        if isinstance(value, str):
+            value = json.loads(value) if value.strip() else []
+        if not isinstance(value, list):
+            raise ValueError("CORS_ORIGINS must be a JSON array of exact HTTP(S) origins")
+        origins = []
+        for origin in value:
+            if not isinstance(origin, str) or not origin or origin != origin.strip():
+                raise ValueError("Each CORS origin must be a non-empty string without whitespace")
+            try:
+                parts = urlsplit(origin)
+                canonical = str(HttpUrl(origin)).removesuffix("/")
+            except ValueError as error:
+                raise ValueError("Invalid HTTP(S) origin") from error
+            if (
+                parts.scheme not in {"http", "https"}
+                or not parts.netloc
+                or parts.path or parts.query or parts.fragment
+                or parts.username is not None or parts.password is not None
+                or "*" in origin or "\\" in origin
+                or origin != canonical
+            ):
+                raise ValueError("Use a canonical exact HTTP(S) origin without path, credentials or wildcard")
+            if origin not in origins:
+                origins.append(origin)
+        return origins
 
     CLOUDFLARE_ACCOUNT_ID: str | None = None
     CLOUDFLARE_API_TOKEN: str | None = None

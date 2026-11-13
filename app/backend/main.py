@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from starlette.concurrency import run_in_threadpool
-from fastapi.middleware.cors import CORSMiddleware
 from backend.api.auth import auth_router
 from backend.api.images import router as images_router
 from backend.api.site import router as site_router
 from backend.core.config import settings
+from backend.core.csrf import OriginCSRFMiddleware
 from backend.services.image_storage import close_image_storage, get_image_storage
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 
 @asynccontextmanager
@@ -26,9 +27,11 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(images_router)
 app.include_router(auth_router)
 app.include_router(site_router)
+# CORS is outermost so allowed browser origins can read CSRF error responses.
+app.add_middleware(OriginCSRFMiddleware, allowed_origins=settings.CORS_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

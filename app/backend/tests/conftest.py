@@ -13,6 +13,7 @@ from io import BytesIO
 os.environ.update(
     SECRET_KEY="test-only-secret-key-at-least-32-bytes", ALGORITHM="HS256",
     COOKIE_SECURE="false", COOKIE_SAMESITE="lax", ACCESS_TOKEN_EXPIRE_MINUTES="20",
+    CORS_ORIGINS='["http://localhost:5173", "https://browser.test"]',
     DB_DRIVER="postgresql+asyncpg", DB_USER="test", DB_PASS="test",
     DB_HOST="127.0.0.1", DB_PORT="5432", DB_NAME="test", DB_SSL="",
     DB_POOL_SIZE="7", DB_MAX_OVERFLOW="6", DB_POOL_TIMEOUT="10",
