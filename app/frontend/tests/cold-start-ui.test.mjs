@@ -90,9 +90,9 @@ async function setup(t, initiallyAvailable = false) {
   })
   await act(async () => {
     tree = create(h(StrictMode, null, h(AuthProvider, null,
-      h(MemoryRouter, null, h(BackendNotice), h(Probe), h(Routes, null,
+      h(MemoryRouter, null, h(Probe), h(Routes, null,
         h(Route, { path: '/', element: h(Home) }),
-        h(Route, { path: '/Text-to-Masterpiece', element: h(Generate) }),
+        h(Route, { path: '/Text-to-Masterpiece', element: h('main', null, h(BackendNotice), h(Generate)) }),
       )),
     )))
   })
@@ -111,10 +111,11 @@ async function setup(t, initiallyAvailable = false) {
 
 test('real Home Create navigation stays usable during cold start; StrictMode does not duplicate recovery or guests', async t => {
   const app = await setup(t)
-  assert.match(app.text(), /Starting server/)
-  assert.match(app.text(), /continue preparing your prompt/)
+  assert.doesNotMatch(app.text(), /Starting server|continue preparing your prompt/)
   assert.equal(app.calls.length, 1)
   await app.create()
+  assert.match(app.text(), /Starting server/)
+  assert.match(app.text(), /continue preparing your prompt/)
   assert.equal(app.input().loading, false)
   await act(async () => app.input().onChange('a draft before the server wakes'))
   await act(async () => app.input().onSend())

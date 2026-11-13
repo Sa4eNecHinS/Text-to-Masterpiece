@@ -9,10 +9,9 @@ function App() {
   return (
     <AuthProvider>
     <BrowserRouter>
-      <BackendNotice />
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/Text-to-Masterpiece" element={<Generate />} />
+        <Route path="/Text-to-Masterpiece" element={<><BackendNotice /><Generate /></>} />
       </Routes>
     </BrowserRouter>
     </AuthProvider>
