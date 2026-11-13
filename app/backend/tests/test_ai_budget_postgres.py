@@ -2,7 +2,7 @@
 
 Uses a temporary local PostgreSQL cluster when binaries are installed, or an
 explicit TEST_AI_DATABASE_URL. Every test uses a random, disposable schema;
-SQLAlchemy maps `tests` to it, so tests.ai_daily_usage is never touched.
+SQLAlchemy maps both unqualified tables and `tests` to it; application tables are never touched.
 """
 import asyncio
 import base64
@@ -33,7 +33,7 @@ PAYLOAD = {"success": True, "result": {"image": base64.b64encode(IMAGE).decode()
 async def budget_db(budget_postgres_url):
     schema = "t2m_budget_test_" + uuid4().hex
     engine = create_async_engine(
-        budget_postgres_url, execution_options={"schema_translate_map": {"tests": schema}}
+        budget_postgres_url, execution_options={"schema_translate_map": {None: schema, "tests": schema}}
     )
     async with engine.begin() as connection:
         await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -169,7 +169,7 @@ async def test_recreated_engine_keeps_budget(budget_db, monkeypatch):
     # New pool and session factory, as after a backend process restart.
     restarted = create_async_engine(
         budget_db.engine.url,
-        execution_options={"schema_translate_map": {"tests": budget_db.schema}},
+        execution_options={"schema_translate_map": {None: budget_db.schema, "tests": budget_db.schema}},
     )
     try:
         monkeypatch.setattr(ai_budget, "SessionLocal", async_sessionmaker(restarted))

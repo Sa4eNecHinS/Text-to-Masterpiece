@@ -11,7 +11,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select, text, update
+from sqlalchemy import event, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.api import dependencies, images
@@ -31,9 +31,16 @@ from backend.services.image_storage import StorageError
 @pytest_asyncio.fixture
 async def lock_db(budget_postgres_url):
     schema = "t2m_lock_test_" + uuid4().hex
-    engine = create_async_engine(budget_postgres_url, pool_size=10, max_overflow=10, execution_options={
-        "schema_translate_map": {"tests": schema},
+    engine = create_async_engine(budget_postgres_url, pool_size=7, max_overflow=6,
+                                 pool_timeout=10, pool_pre_ping=True, execution_options={
+        "schema_translate_map": {None: schema, "tests": schema},
     })
+    metrics = SimpleNamespace(peak=0)
+
+    @event.listens_for(engine.sync_engine, "checkout")
+    def track_checkout(*args):
+        metrics.peak = max(metrics.peak, engine.pool.checkedout())
+
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:
         await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -44,7 +51,7 @@ async def lock_db(budget_postgres_url):
             provider="cloudflare", provider_model_id="@cf/black-forest-labs/flux-1-schnell",
         ))
     try:
-        yield SimpleNamespace(engine=engine, factory=factory)
+        yield SimpleNamespace(engine=engine, factory=factory, metrics=metrics)
     finally:
         async with engine.begin() as connection:
             await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))

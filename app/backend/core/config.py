@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     B2_KEY_ID: SecretStr | None = None
     B2_APPLICATION_KEY: SecretStr | None = None
 
+    # Per-process pool: five lock connections + up to five SQL transactions
+    # + three concurrent auth/history/models requests for one production worker.
+    DB_POOL_SIZE: Annotated[int, Field(gt=0)] = 7
+    DB_MAX_OVERFLOW: Annotated[int, Field(ge=0)] = 6
+    DB_POOL_TIMEOUT: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 10.0
+
     # Global slot numbers use PostgreSQL's two-int32 advisory-lock API.
     AI_MAX_CONCURRENT_GENERATIONS: Annotated[int, Field(gt=0, le=2**31 - 1)] = 5
     AI_DAILY_NEURON_LIMIT: NeuronAmount

@@ -378,6 +378,9 @@ async def _generate_locked(
 
     commit_started = False
     try:
+        # Fail closed after PUT too. This is not a fence: the PostgreSQL
+        # session can still be lost after this probe, including during COMMIT.
+        await lock.check_connection()
         owner = {
             "user_id": current_user.id if current_user is not None else None,
             "guest_id": guest.id if guest is not None else None,
@@ -405,7 +408,7 @@ async def _generate_locked(
         sqlstate = getattr(getattr(error, "orig", None), "sqlstate", "") or ""
         rejected_commit = isinstance(error, DBAPIError) and sqlstate[:2] in {"23", "40"}
         await finish_io(_rollback_generation(db, storage, object_key, not commit_started or rejected_commit))
-        if not isinstance(error, Exception):
+        if not isinstance(error, Exception) or isinstance(error, GenerationLockUnavailable):
             raise
         logger.error("Failed to persist generation; object_key=%s", object_key)
         raise HTTPException(

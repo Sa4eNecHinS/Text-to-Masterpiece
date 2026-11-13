@@ -13,12 +13,15 @@ db_url = URL.create(
     host=os.getenv("DB_HOST"),
     port=int(os.getenv("DB_PORT", 5432)),
     database=os.getenv("DB_NAME"),
+    query=({"ssl": os.environ["DB_SSL"]} if os.getenv("DB_SSL") else {}),
 )
-# A worker can hold every global slot. Keep five further pooled connections
-# for owner resolution, rate/budget transactions and history, plus burst overflow.
+
 engine = create_async_engine(
-    db_url, echo=False,
-    pool_size=settings.AI_MAX_CONCURRENT_GENERATIONS + 5,
-    max_overflow=10,
+    db_url,
+    echo=False,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT,
+    pool_pre_ping=True,
 )
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)

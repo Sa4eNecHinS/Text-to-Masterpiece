@@ -105,6 +105,7 @@ class S3ImageStorage:
             Key=key,
             Body=data,
             ContentType=content_type,
+            IfNoneMatch="*",
         )
 
     async def download(self, key: str) -> StoredImage:

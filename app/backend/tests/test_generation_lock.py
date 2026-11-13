@@ -24,11 +24,40 @@ def test_invalid_concurrency_configuration(monkeypatch, value):
         Settings(_env_file=None)
 
 
-def test_concurrency_configuration_and_pool_headroom(monkeypatch):
-    assert settings.AI_MAX_CONCURRENT_GENERATIONS == 5
-    assert engine.pool.size() >= settings.AI_MAX_CONCURRENT_GENERATIONS + 5
+def test_production_pool_defaults_and_connection_model(monkeypatch):
+    for name in ("DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT"):
+        monkeypatch.delenv(name, raising=False)
+    defaults = Settings(_env_file=None)
+    assert (defaults.DB_POOL_SIZE, defaults.DB_MAX_OVERFLOW, defaults.DB_POOL_TIMEOUT) == (7, 6, 10)
+    # One pinned connection + at most one SQL connection per generation;
+    # one additional request each for auth, history and models.
+    assert defaults.DB_POOL_SIZE + defaults.DB_MAX_OVERFLOW == 2 * 5 + 3
+    assert engine.pool.size() == settings.DB_POOL_SIZE
+    assert engine.pool._max_overflow == settings.DB_MAX_OVERFLOW
+    assert engine.pool.timeout() == settings.DB_POOL_TIMEOUT
+    assert engine.pool._pre_ping is True
+
+
+def test_pool_environment_overrides_are_independent_of_generation_limit(monkeypatch):
+    monkeypatch.setenv("DB_POOL_SIZE", "8")
+    monkeypatch.setenv("DB_MAX_OVERFLOW", "0")
+    monkeypatch.setenv("DB_POOL_TIMEOUT", "2.5")
     monkeypatch.setenv("AI_MAX_CONCURRENT_GENERATIONS", "7")
-    assert Settings(_env_file=None).AI_MAX_CONCURRENT_GENERATIONS == 7
+    configured = Settings(_env_file=None)
+    assert (configured.DB_POOL_SIZE, configured.DB_MAX_OVERFLOW, configured.DB_POOL_TIMEOUT) == (8, 0, 2.5)
+    assert configured.AI_MAX_CONCURRENT_GENERATIONS == 7
+
+
+@pytest.mark.parametrize("name,value", [
+    ("DB_POOL_SIZE", "0"), ("DB_POOL_SIZE", "-1"), ("DB_POOL_SIZE", "1.5"),
+    ("DB_MAX_OVERFLOW", "-1"), ("DB_MAX_OVERFLOW", "1.5"),
+    ("DB_POOL_TIMEOUT", "0"), ("DB_POOL_TIMEOUT", "-1"),
+    ("DB_POOL_TIMEOUT", "NaN"), ("DB_POOL_TIMEOUT", "Infinity"),
+])
+def test_invalid_pool_configuration(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name):
+        Settings(_env_file=None)
 
 
 def test_owner_keys_are_stable_signed_and_namespaced():

@@ -29,7 +29,7 @@ D = Decimal
 async def rate_db(budget_postgres_url):
     schema = "t2m_rate_test_" + uuid4().hex
     engine = create_async_engine(
-        budget_postgres_url, execution_options={"schema_translate_map": {"tests": schema}}
+        budget_postgres_url, execution_options={"schema_translate_map": {None: schema, "tests": schema}}
     )
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:
@@ -255,7 +255,7 @@ async def test_new_engine_keeps_rate_limit_state(client, real_rate, provider, mo
     before = await bucket_rows(real_rate)
     await real_rate.engine.dispose()
     restarted = create_async_engine(real_rate.engine.url, execution_options={
-        "schema_translate_map": {"tests": real_rate.schema},
+        "schema_translate_map": {None: real_rate.schema, "tests": real_rate.schema},
     })
     try:
         monkeypatch.setattr(dependencies, "SessionLocal", async_sessionmaker(restarted))
