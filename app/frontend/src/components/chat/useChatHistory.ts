@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '@/components/auth/authContext'
 import { getChats, type ChatSummary } from '@/services/requests'
+import { useBackendReadiness } from '@/components/useBackendReadiness'
 
 export function useChatHistory() {
   const { user } = useAuth()
+  const backend = useBackendReadiness()
+  const previousOwner = useRef(user?.id)
   const [entries, setEntries] = useState<ChatSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -21,7 +24,10 @@ export function useChatHistory() {
     const load = async () => {
       setLoading(true)
       setError('')
-      setEntries([])
+      if (previousOwner.current !== user?.id) {
+        setEntries([])
+        previousOwner.current = user?.id
+      }
       offset.current = 0
       try {
         const rows = await getChats(0, controller.signal)
@@ -37,7 +43,7 @@ export function useChatHistory() {
     }
     void load()
     return () => { controller.abort(); request.current?.abort() }
-  }, [user?.id, revision])
+  }, [user?.id, revision, backend.retryVersion])
 
   const loadMore = async () => {
     if (busy.current || !hasMore) return

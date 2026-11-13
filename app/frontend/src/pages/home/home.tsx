@@ -1,5 +1,6 @@
 import "@/pages/home/home.css";
 import background from "@/assets/b2_1786608771b8b1.png";
+import { Link } from "react-router-dom";
 
 const APP_ENDPOINT = "/Text-to-Masterpiece";
 
@@ -25,9 +26,9 @@ export function Home() {
             </span>
           </h1>
 
-          <a className="home__cta" href={APP_ENDPOINT}>
+          <Link className="home__cta" to={APP_ENDPOINT}>
             {CTA_LABEL}
-          </a>
+          </Link>
         </section>
 
         <section className="home__right">

@@ -7,7 +7,7 @@ export type GenerateResponse = { chat_id: string; generation_id: number; model_i
 export type ChatSummary = { id: string; title: string; created_at: string; updated_at: string }
 
 export async function getModels(signal?: AbortSignal): Promise<ImageModel[]> {
-  const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/models`, { signal })
+  const response = await readAPI(`${API_BASE_URL}/Text-to-Masterpiece/models`, { signal })
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load models (HTTP ${response.status}).`)
   const data: unknown = await response.json()
   if (!Array.isArray(data) || !data.every(model => model && typeof model.model_id === 'string'
@@ -26,7 +26,7 @@ export type ChatHistoryEntry = {
 
 export async function getChatHistory(offset = 0, signal?: AbortSignal): Promise<ChatHistoryEntry[]> {
   await initializeSession()
-  const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/chat_history?limit=50&offset=${offset}`, {
+  const response = await readAPI(`${API_BASE_URL}/Text-to-Masterpiece/chat_history?limit=50&offset=${offset}`, {
     credentials: 'include', signal,
   })
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load history (HTTP ${response.status}).`)
@@ -40,7 +40,7 @@ export async function getChatHistory(offset = 0, signal?: AbortSignal): Promise<
 
 export async function getChats(offset = 0, signal?: AbortSignal): Promise<ChatSummary[]> {
   await initializeSession()
-  const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/chats?limit=50&offset=${offset}`, {
+  const response = await readAPI(`${API_BASE_URL}/Text-to-Masterpiece/chats?limit=50&offset=${offset}`, {
     credentials: 'include', signal,
   })
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load chats (HTTP ${response.status}).`)
@@ -54,7 +54,7 @@ export async function getChats(offset = 0, signal?: AbortSignal): Promise<ChatSu
 
 export async function getChat(chatId: string, signal?: AbortSignal): Promise<ChatHistoryEntry[]> {
   await initializeSession()
-  const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/chats/${encodeURIComponent(chatId)}`, {
+  const response = await readAPI(`${API_BASE_URL}/Text-to-Masterpiece/chats/${encodeURIComponent(chatId)}`, {
     credentials: 'include', signal,
   })
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load chat (HTTP ${response.status}).`)
@@ -230,7 +230,7 @@ export function resetSession(): void {
 }
 
 export const getCurrentUser = async () => {
-  const res = await authFetch('/users/me')
+  const res = await readAPI(`${API_BASE_URL}/auth/Text-to-Masterpiece/users/me`, { credentials: 'include' })
   if (res.status === 401) return null
   return authResponse<User>(res)
 }
@@ -256,7 +256,12 @@ export function rememberSession(user: User): void {
 export function startGuestSession(): Promise<void> {
   if (!guestSessionRequest) {
     guestSessionRequest = (async () => {
-      const resp = await fetch(`${API_BASE_URL}/Text-to-Masterpiece`, { credentials: 'include' })
+      // This GET can CREATE a guest: wait for readiness, but never replay an
+      // ambiguous creation request automatically (e.g. lost Set-Cookie response).
+      if (recoveryEnabled) await waitForReadiness()
+      const resp = await fetch(`${API_BASE_URL}/Text-to-Masterpiece`, { credentials: 'include',
+        ...(recoveryEnabled ? { signal: AbortSignal.timeout(10_000) } : {}),
+      })
       if (!resp.ok) throw new Error((await responseDetail(resp)) || `Guest session failed (HTTP ${resp.status})`)
     })().finally(() => {
       // Do not cache forever: cookies may expire or be cleared between visits.
@@ -264,4 +269,123 @@ export function startGuestSession(): Promise<void> {
     })
   }
   return guestSessionRequest
+}
+
+// One bounded, on-demand recovery cycle for the whole application. Activated
+// by AuthProvider, not a background keepalive and never used for mutation POSTs.
+export const SERVER_STARTING_MESSAGE = 'The server is starting. Please try again shortly.'
+export type BackendState = {
+  status: 'idle' | 'checking' | 'starting' | 'ready' | 'unavailable' | 'error'
+  retryVersion: number
+}
+let backendState: BackendState = { status: 'idle', retryVersion: 0 }
+const backendListeners = new Set<() => void>()
+let recoveryEnabled = false
+let recoveryCycle: Promise<void> | undefined
+
+export const getBackendState = () => backendState
+export function subscribeBackend(listener: () => void) {
+  backendListeners.add(listener)
+  return () => { backendListeners.delete(listener) }
+}
+function publishBackend(status: BackendState['status'], manualSuccess = false) {
+  backendState = { status, retryVersion: backendState.retryVersion + Number(manualSuccess) }
+  backendListeners.forEach(listener => listener())
+}
+class ProbeHTTPError extends Error {
+  status: number
+  constructor(status: number) {
+    super(`Server readiness check failed (HTTP ${status}).`)
+    this.status = status
+  }
+}
+function transientFailure(error: unknown): boolean {
+  return error instanceof TypeError
+    || (error instanceof Error && error.name === 'TimeoutError')
+    || (error instanceof ProbeHTTPError && [502, 503, 504].includes(error.status))
+}
+function unavailableError() { return new Error('Server temporarily unavailable') }
+
+function beginReadiness(manual = false, deadline = Date.now() + 120_000): Promise<void> {
+  if (recoveryCycle) return recoveryCycle
+  if (backendState.status === 'unavailable' && !manual) return Promise.reject(unavailableError())
+  publishBackend('checking')
+  recoveryCycle = (async () => {
+    let attempt = 0
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/models`, {
+          signal: AbortSignal.timeout(Math.max(1, Math.min(10_000, deadline - Date.now()))),
+        })
+        if (!response.ok) throw new ProbeHTTPError(response.status)
+        publishBackend('ready', manual)
+        return
+      } catch (error) {
+        if (!transientFailure(error)) {
+          publishBackend('error') // 401/403 and other permanent errors are not cold start.
+          throw error
+        }
+        publishBackend('starting')
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) break
+        const delay = Math.min(remaining, Math.min(10_000, 1000 * 2 ** attempt++) * (0.8 + Math.random() * 0.4))
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+    publishBackend('unavailable')
+    throw unavailableError()
+  })().finally(() => { recoveryCycle = undefined })
+  return recoveryCycle
+}
+
+export function startBackendReadiness(): Promise<void> {
+  recoveryEnabled = true
+  if (backendState.status === 'ready' || backendState.status === 'error') return Promise.resolve()
+  return beginReadiness()
+}
+export function retryBackendReadiness(): Promise<void> {
+  recoveryEnabled = true
+  return beginReadiness(true)
+}
+
+// Cancelling a view must not cancel the shared readiness check for other views.
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
+}
+async function waitForReadiness(signal?: AbortSignal): Promise<void> {
+  if (backendState.status === 'ready' || backendState.status === 'error') return
+  await abortable(startBackendReadiness(), signal)
+}
+
+async function readAPI(url: string, options: RequestInit = {}): Promise<Response> {
+  // Low-level API callers retain single-request semantics unless the app has
+  // explicitly enabled recovery. AuthProvider enables it before passive effects.
+  options.signal?.throwIfAborted()
+  if (!recoveryEnabled) return fetch(url, options)
+  const signal = options.signal ?? undefined
+  const deadline = Date.now() + 120_000
+  await waitForReadiness(signal)
+  for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted()
+    if (Date.now() >= deadline) throw unavailableError()
+    try {
+      const timeout = AbortSignal.timeout(Math.max(1, Math.min(10_000, deadline - Date.now())))
+      const response = await fetch(url, { ...options, signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
+      if ([502, 503, 504].includes(response.status)) throw new ProbeHTTPError(response.status)
+      return response
+    } catch (error) {
+      if (signal?.aborted || !transientFailure(error)) throw error
+      if (attempt === 1) {
+        publishBackend('unavailable')
+        throw unavailableError()
+      }
+      await abortable(beginReadiness(false, deadline), signal)
+    }
+  }
 }

@@ -37,11 +37,12 @@ async function sourceModule(path, imports = {}) {
 async function harness(t, options = {}) {
   const key = `__t2mChatTest${instance++}`
   const fixture = {
-    user: { id: 1, email: 'owner@example.com' }, generateCalls: [], chatCalls: [], listCalls: [],
+    user: { id: 1, email: 'owner@example.com' }, backend: { status: 'ready', retryVersion: 0 },
+    generateCalls: [], chatCalls: [], listCalls: [],
     getModels: async () => [model], getChats: async () => [], getChat: async () => [],
     generateImage: async (prompt, modelId, chatId) => result(chatId || A), ...options,
   }
-  fixture.initializeSession = async () => fixture.user
+  fixture.initializeSession ??= async () => fixture.user
   globalThis[key] = fixture
   const previousStorage = globalThis.sessionStorage
   const previousActEnvironment = globalThis.IS_REACT_ACT_ENVIRONMENT
@@ -60,7 +61,7 @@ async function harness(t, options = {}) {
     delete globalThis[key]
   })
   const state = `globalThis[${JSON.stringify(key)}]`
-  const api = moduleUrl(['getModels', 'initializeSession', 'getChats', 'getChat', 'generateImage'].map(name =>
+  const api = moduleUrl(`export const SERVER_STARTING_MESSAGE = 'The server is starting. Please try again shortly.'; export const retryBackendReadiness = async () => {};\n` + ['getModels', 'initializeSession', 'getChats', 'getChat', 'generateImage'].map(name =>
     `export const ${name} = (...args) => {
       ${name === 'getChat' ? `${state}.chatCalls.push(args);` : ''}
       ${name === 'getChats' ? `${state}.listCalls.push(args);` : ''}
@@ -68,8 +69,10 @@ async function harness(t, options = {}) {
       return ${state}.${name}(...args);
     };`).join('\n'))
   const auth = moduleUrl(`export const useAuth = () => ({ user: ${state}.user });`)
+  const backend = moduleUrl(`export const useBackendReadiness = () => ${state}.backend;`)
   const hook = await sourceModule('components/chat/useChatHistory.ts', {
     '@/components/auth/authContext': auth, '@/services/requests': api,
+    '@/components/useBackendReadiness': backend,
   })
   const currentChatUrl = await sourceModule('utils/currentChat.ts')
   const currentChat = await import(currentChatUrl)
@@ -79,6 +82,7 @@ async function harness(t, options = {}) {
       `export function ${name}(props) { return createElement(${JSON.stringify(name)}, props, props.children); }`).join('\n'))
   const page = await sourceModule('pages/generate/GeneratePage.tsx', {
     '@/services/requests': api, '@/components/auth/authContext': auth,
+    '@/components/useBackendReadiness': backend,
     '@/components/chat/useChatHistory': hook, '@/utils/currentChat': currentChatUrl,
     '@/components/layout/AppLayout': visuals, '@/components/chat/ChatInput': visuals,
     '@/components/chat/MessageList': visuals, '@/components/chat/ModelSelect': visuals,
@@ -95,6 +99,11 @@ async function harness(t, options = {}) {
     input: () => tree.root.findByType('ChatInput').props,
     messages: () => tree.root.findAllByType('MessageList')[0]?.props.messages ?? [],
     history: () => tree.root.findByType('HistoryProbe').props,
+    text: () => JSON.stringify(tree.toJSON()),
+    updateBackend: async backend => {
+      fixture.backend = backend
+      await act(async () => { tree.update(createElement(Component)) })
+    },
     updateOwner: async user => {
       fixture.user = user
       await act(async () => { tree.update(createElement(Component)) })
@@ -223,6 +232,93 @@ test('owner change ignores a late generation result', async t => {
   assert.deepEqual(h.messages(), [])
   assert.equal(h.layout().history.selectedId, null)
   assert.equal(h.input().loading, false)
+})
+
+test('cold start leaves the composer editable and restores models/session/history without sending the draft', async t => {
+  const session = deferred(), catalogue = deferred(), history = deferred()
+  const h = await harness(t, {
+    backend: { status: 'starting', retryVersion: 0 },
+    saved: { owner: 1, selectedId: A, input: 'old saved draft', messages: [] },
+    initializeSession: () => session.promise,
+    getModels: () => catalogue.promise,
+    getChats: () => history.promise,
+    getChat: async () => rows('restored'),
+  })
+  assert.equal(h.input().loading, false)
+  assert.equal(h.input().disabled, false)
+  await send(h, 'my prompt while Render wakes up')
+  assert.equal(h.input().value, 'my prompt while Render wakes up')
+  assert.match(h.text(), /The server is starting. Please try again shortly./)
+  assert.deepEqual(h.fixture.generateCalls, [])
+  await h.updateBackend({ status: 'ready', retryVersion: 0 })
+  await act(async () => {
+    session.resolve(h.fixture.user)
+    catalogue.resolve([model])
+    history.resolve([summary(A)])
+  })
+  assert.equal(h.input().value, 'my prompt while Render wakes up')
+  assert.equal(h.layout().history.selectedId, A)
+  assert.equal(h.layout().history.entries.length, 1)
+  assert.equal(h.input().modelSelect.models.length, 1)
+  assert.equal(h.messages().length, 4)
+  assert.doesNotMatch(h.text(), /The server is starting/)
+  assert.deepEqual(h.fixture.generateCalls, [])
+  await act(async () => { await h.input().onSend() })
+  assert.deepEqual(h.fixture.generateCalls[0], ['my prompt while Render wakes up', model.model_id, A])
+})
+
+test('manual recovery reloads failed initialization without overwriting edits or the saved selection', async t => {
+  const fail = async () => { throw new Error('Server temporarily unavailable') }
+  const h = await harness(t, {
+    backend: { status: 'unavailable', retryVersion: 0 },
+    saved: { owner: 1, selectedId: A, input: 'old saved draft', messages: [] },
+    initializeSession: fail, getModels: fail, getChats: fail,
+  })
+  await send(h, 'keep this new draft')
+  assert.equal(h.input().loading, false)
+  assert.deepEqual(h.fixture.generateCalls, [])
+  h.fixture.initializeSession = async () => h.fixture.user
+  h.fixture.getModels = async () => [model]
+  h.fixture.getChats = async () => [summary(A)]
+  h.fixture.getChat = async () => rows('recovered')
+  await h.updateBackend({ status: 'ready', retryVersion: 1 })
+  assert.equal(h.input().value, 'keep this new draft')
+  assert.equal(h.layout().history.selectedId, A)
+  assert.equal(h.layout().history.error, '')
+  assert.equal(h.input().modelSelect.error, '')
+  assert.doesNotMatch(h.text(), /Server temporarily unavailable|Unable to restore/)
+  assert.deepEqual(h.fixture.generateCalls, [])
+  assert.equal(h.fixture.listCalls.length, 2)
+})
+
+test('recovery preserves the current chat, draft and model selection for an initialized owner', async t => {
+  const h = await harness(t, {
+    saved: { owner: 1, selectedId: A, input: 'draft', messages: [] },
+    getChat: async () => rows('chat'),
+    getModels: async () => [model, { model_id: 'second', name: 'Second' }],
+  })
+  await act(async () => {
+    h.input().modelSelect.onChange('second')
+    h.input().onChange('still editing')
+  })
+  await h.updateBackend({ status: 'unavailable', retryVersion: 0 })
+  await h.updateBackend({ status: 'ready', retryVersion: 1 })
+  assert.equal(h.layout().history.selectedId, A)
+  assert.equal(h.input().value, 'still editing')
+  assert.equal(h.input().modelSelect.value, 'second')
+  assert.deepEqual(h.fixture.generateCalls, [])
+})
+
+test('a permanent session error is not presented as a cold start when sending', async t => {
+  const h = await harness(t, {
+    backend: { status: 'error', retryVersion: 0 },
+    initializeSession: async () => { throw new Error('Access denied (HTTP 403).') },
+  })
+  await send(h, 'draft')
+  assert.equal(h.input().value, 'draft')
+  assert.match(h.text(), /Access denied/)
+  assert.doesNotMatch(h.text(), /The server is starting/)
+  assert.deepEqual(h.fixture.generateCalls, [])
 })
 
 test('sidebar pagination uses chats, deduplicates IDs, and resets for another owner', async t => {

@@ -1,20 +1,25 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { initializeSession, rememberSession, resetSession, logoutUser, loginUser, registerUser, type User } from '@/services/requests'
+import { useLayoutEffect, useState, type ReactNode } from 'react'
+import { initializeSession, rememberSession, resetSession, logoutUser, loginUser, registerUser, startBackendReadiness, type User } from '@/services/requests'
 import { AuthContext, type AuthMode } from './authContext'
+import { useBackendReadiness } from '@/components/useBackendReadiness'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [sessionError, setSessionError] = useState('')
 
-  useEffect(() => {
+  const backend = useBackendReadiness()
+  // Enable the shared readiness gate before child pages start passive effects.
+  // StrictMode replays join the same promise rather than starting another loop.
+  useLayoutEffect(() => {
     let active = true
+    void startBackendReadiness().catch(() => {})
     initializeSession().then(user => {
-      if (active) setUser(user)
+      if (active) { setUser(user); setSessionError('') }
     }).catch(error => {
       if (active) setSessionError(error instanceof Error ? error.message : 'Unable to restore your session.')
     })
     return () => { active = false }
-  }, [])
+  }, [backend.retryVersion])
 
   const authenticate = async (mode: AuthMode, email: string, password: string): Promise<void> => {
     await initializeSession().catch(() => {})
@@ -38,5 +43,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
   }
 
-  return <AuthContext.Provider value={{ user, sessionError, authenticate, logout }}>{children}</AuthContext.Provider>
+  const visibleSessionError = ['checking', 'starting', 'unavailable'].includes(backend.status) ? '' : sessionError
+  return <AuthContext.Provider value={{ user, sessionError: visibleSessionError, authenticate, logout }}>{children}</AuthContext.Provider>
 }

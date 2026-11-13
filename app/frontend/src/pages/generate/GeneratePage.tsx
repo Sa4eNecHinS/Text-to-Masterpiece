@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { generateImage, getChat, getModels, initializeSession, type ImageModel } from "@/services/requests";
+import { generateImage, getChat, getModels, initializeSession, retryBackendReadiness, SERVER_STARTING_MESSAGE, type ImageModel } from "@/services/requests";
+import { useBackendReadiness } from "@/components/useBackendReadiness";
 import { useAuth } from "@/components/auth/authContext";
 import { useChatHistory } from "@/components/chat/useChatHistory";
 import { generationMessages, readCurrentChat, saveCurrentChat } from "@/utils/currentChat";
@@ -12,6 +13,11 @@ import type { ModelSelectProps } from "@/components/chat/ModelSelect";
 export default function GeneratePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const draftVersion = useRef(0);
+  const changeInput = (value: string) => { ++draftVersion.current; setInput(value); };
+  const [sendError, setSendError] = useState('');
+  const backend = useBackendReadiness();
+  const serverPending = ['idle', 'checking', 'starting', 'unavailable'].includes(backend.status);
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const [sessionRevision, setSessionRevision] = useState(0);
@@ -51,11 +57,11 @@ export default function GeneratePage() {
     };
     void load();
     return () => controller.abort();
-  }, [modelsRevision]);
+  }, [modelsRevision, backend.retryVersion]);
 
   const validModel = !modelsLoading && !modelsError && models.some(model => model.model_id === modelId);
   const modelSelect: ModelSelectProps = {
-    models, value: modelId, loading: modelsLoading, error: modelsError,
+    models, value: modelId, loading: modelsLoading || serverPending, error: serverPending ? '' : modelsError,
     disabled: loading, onChange: setModelId,
     onRetry: () => setModelsRevision(value => value + 1),
   };
@@ -68,16 +74,21 @@ export default function GeneratePage() {
     const invalidateView = () => { ++viewVersion.current; };
     const previousOwner = owner.current;
     const previousChat = activeChat.current;
+    const draftAtStart = draftVersion.current;
+    const changingOwner = previousOwner !== undefined && previousOwner !== (user?.id ?? null);
     const guestDraft = previousOwner === null ? readCurrentChat(null) : null;
     sending.current = false;
-    activeChat.current = null;
     setReady(false);
     setLoading(false);
     setChatLoading(false);
     setChatError('');
-    setSelectedId(null);
-    setMessages([]);
-    setInput('');
+    setRestoreError('');
+    if (changingOwner) {
+      activeChat.current = null;
+      setSelectedId(null);
+      setMessages([]);
+      setInput('');
+    }
     const restore = async () => {
       const currentUser = await initializeSession();
       if (controller.signal.aborted) return;
@@ -86,11 +97,15 @@ export default function GeneratePage() {
       // must never reuse the previous owner's selection or cached results.
       const migrated = previousOwner === null && nextOwner !== null;
       const saved = migrated ? guestDraft : readCurrentChat(nextOwner);
-      const chatId = (migrated ? previousChat : saved?.selectedId) ?? null;
+      const sameOwner = previousOwner === nextOwner;
+      const chatId = (sameOwner ? activeChat.current : migrated ? previousChat : saved?.selectedId) ?? null;
       owner.current = nextOwner;
       activeChat.current = chatId;
       setSelectedId(chatId);
-      setInput(saved?.input ?? '');
+      // A delayed session restore must not overwrite edits made while waking up.
+      if (!sameOwner && draftVersion.current === draftAtStart && (previousOwner !== undefined || draftAtStart === 0)) {
+        setInput(saved?.input ?? '');
+      }
       setRestoreError('');
       if (chatId) {
         setChatLoading(true);
@@ -102,20 +117,20 @@ export default function GeneratePage() {
         } finally {
           if (!controller.signal.aborted) setChatLoading(false);
         }
-      } else {
+      } else if (!sameOwner) {
         setMessages(saved?.messages ?? []);
       }
       if (!controller.signal.aborted && version === viewVersion.current) setReady(true);
     };
-    void restore().catch(() => {
-      if (!controller.signal.aborted) setRestoreError('Unable to restore your session. Please reload to try again.');
+    void restore().catch(error => {
+      if (!controller.signal.aborted) setRestoreError(error instanceof Error ? error.message : 'Unable to restore your session.');
     });
     return () => {
       controller.abort();
       chatRequest.current?.abort();
       invalidateView();
     };
-  }, [user?.id, sessionRevision]);
+  }, [user?.id, sessionRevision, backend.retryVersion]);
 
   useEffect(() => {
     if (!ready || owner.current === undefined) return;
@@ -132,7 +147,6 @@ export default function GeneratePage() {
     activeChat.current = chatId;
     setSelectedId(chatId);
     setMessages([]);
-    setInput('');
     setChatError('');
     setChatLoading(true);
     try {
@@ -157,7 +171,17 @@ export default function GeneratePage() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || sending.current || !ready || !validModel || chatLoading || chatError) return;
+    if (!input.trim() || sending.current) return;
+    if (serverPending) {
+      setSendError(SERVER_STARTING_MESSAGE);
+      return;
+    }
+    if (!ready) {
+      setSendError(restoreError || 'Your session is not ready. Please try again.');
+      return;
+    }
+    if (!validModel || chatLoading || chatError) return;
+    setSendError('');
     sending.current = true;
     const version = ++viewVersion.current;
     
@@ -207,13 +231,18 @@ export default function GeneratePage() {
       setSessionRevision(value => value + 1);
       history.refresh();
     }} history={{
-      entries: history.entries, loading: history.loading, error: history.error,
+      entries: history.entries, loading: history.loading, error: serverPending ? '' : history.error,
       hasMore: history.hasMore, selectedId, disabled: loading || !ready,
       onSelect: entry => { void selectHistory(entry.id); }, onLoadMore: history.loadMore, onRetry: history.refresh,
     }}>
-      {restoreError && <p className="chat-restore-error" role="alert">{restoreError}</p>}
+      {!serverPending && restoreError && <div className="chat-restore-error" role="alert">
+        <p>{restoreError}</p>
+        <button type="button" onClick={() => { void retryBackendReadiness().catch(() => {}); }}>Try again</button>
+      </div>}
+      {sendError && (serverPending || sendError !== SERVER_STARTING_MESSAGE) &&
+        <p className="chat-restore-error" role="status">{sendError}</p>}
       {chatLoading && <p className="chat-restore-error" role="status">Loading chat…</p>}
-      {chatError && <div className="chat-restore-error" role="alert">
+      {!serverPending && chatError && <div className="chat-restore-error" role="alert">
         <p>{chatError}</p>
         <button onClick={() => { if (selectedId) void selectHistory(selectedId); }} disabled={!ready}>Try again</button>
       </div>}
@@ -226,11 +255,11 @@ export default function GeneratePage() {
             <div className="input-transition-wrapper centered">
               <ChatInput
                 modelSelect={modelSelect}
-                value={input} 
-                onChange={setInput} 
+                value={input}
+                onChange={changeInput}
                 onSend={handleSend} 
-                loading={loading || chatLoading || !ready}
-                disabled={!validModel || !!chatError}
+                loading={loading}
+                disabled={!serverPending && ready && (!validModel || !!chatError || chatLoading)}
                 placeholder="Describe your vision..."
                 isGlass={true} 
               />
@@ -250,11 +279,11 @@ export default function GeneratePage() {
         <div className="input-transition-wrapper bottom">
           <ChatInput
             modelSelect={modelSelect}
-            value={input} 
-            onChange={setInput} 
+            value={input}
+            onChange={changeInput}
             onSend={handleSend} 
-            loading={loading || chatLoading || !ready}
-            disabled={!validModel || !!chatError}
+            loading={loading}
+            disabled={!serverPending && ready && (!validModel || !!chatError || chatLoading)}
             placeholder="Continue..."
             isGlass={true}
           />
