@@ -1,7 +1,8 @@
 from datetime import datetime
+from string import punctuation
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 from typing import Annotated
 
 
@@ -50,6 +51,24 @@ class UserRegistration(BaseModel):
 
     email: str
     password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if (
+            len(value) < 8
+            or not any("A" <= char <= "Z" for char in value)
+            or not any("0" <= char <= "9" for char in value)
+            or not any(char in punctuation for char in value)
+        ):
+            raise ValueError(
+                "Use at least 8 characters, including an uppercase letter (A-Z), "
+                "a digit (0-9), and a special character (e.g. !@#$%)."
+            )
+        # bcrypt accepts at most 72 bytes; reject rather than truncate passwords.
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must not exceed 72 UTF-8 bytes.")
+        return value
 
 
 class UserPublic(BaseModel):

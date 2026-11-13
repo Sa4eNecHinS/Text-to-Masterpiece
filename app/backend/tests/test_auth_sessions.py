@@ -25,7 +25,7 @@ async def test_guest_history_merge_and_session(client, db, provider, action):
     assert len(requests) == 2
     if action == "registrate":
         response = await client.post("/auth/Text-to-Masterpiece/registrate", json={
-            "email": "user@example.com", "password": "password123",
+            "email": "user@example.com", "password": "Password123!",
         })
     else:
         response = await client.post("/auth/Text-to-Masterpiece/token", data={

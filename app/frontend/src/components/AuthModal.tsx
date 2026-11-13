@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Eye, EyeOff, LoaderCircle, X } from 'lucide-react'
 import { AuthError, type AuthField } from '@/services/requests'
 import type { AuthMode } from './auth/authContext'
+import { PASSWORD_REQUIREMENTS, validateRegistrationPassword } from '@/utils/password'
 
 type Props = {
   onClose: () => void
@@ -57,6 +58,10 @@ export default function AuthModal({ onClose, onSubmit }: Props) {
     if (!email.trim()) fields.email = 'Enter your email.'
     else if (!emailInput.current?.validity.valid) fields.email = 'Enter a valid email.'
     if (!password) fields.password = 'Enter your password.'
+    else if (signup) {
+      const passwordError = validateRegistrationPassword(password)
+      if (passwordError) fields.password = passwordError
+    }
     if (signup && !confirmPassword) fields.confirmPassword = 'Confirm your password.'
     else if (signup && password !== confirmPassword) fields.confirmPassword = 'Passwords do not match.'
     setErrors(fields)
@@ -120,11 +125,12 @@ export default function AuthModal({ onClose, onSubmit }: Props) {
             <div className="auth-password">
               <input id={`${id}-password`} type={visible ? 'text' : 'password'} autoComplete={signup ? 'new-password' : 'current-password'} required
                 value={password} disabled={loading} onChange={event => setPassword(event.target.value)}
-                aria-invalid={!!errors.password} aria-describedby={errors.password ? `${id}-password-error` : undefined} />
+                aria-invalid={!!errors.password} aria-describedby={[signup ? `${id}-password-hint` : '', errors.password ? `${id}-password-error` : ''].filter(Boolean).join(' ') || undefined} />
               <button type="button" className="auth-visibility" aria-label={visible ? 'Hide password' : 'Show password'} aria-pressed={visible} onClick={() => setVisible(!visible)}>
                 {visible ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
+            {signup && <span id={`${id}-password-hint`}>{PASSWORD_REQUIREMENTS}</span>}
             {errors.password && <span id={`${id}-password-error`} className="auth-error">{errors.password}</span>}
           </div>
           {signup && <div className="auth-field">

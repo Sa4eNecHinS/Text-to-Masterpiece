@@ -113,7 +113,7 @@ async def test_guest_image_survives_auth_transfer(client, db, storage, monkeypat
     key = db.sync.get(UserRequest, data["generation_id"]).object_key
     assert (await client.get(f"/images/{data['generation_id']}")).status_code == 200
     if action == "registrate":
-        auth = await client.post("/auth/Text-to-Masterpiece/registrate", json={"email": "registered@example.com", "password": "password123"})
+        auth = await client.post("/auth/Text-to-Masterpiece/registrate", json={"email": "registered@example.com", "password": "Password123!"})
     else:
         auth = await client.post("/auth/Text-to-Masterpiece/token", data={"username": "registered@example.com", "password": "password123"})
     assert auth.status_code == 200
