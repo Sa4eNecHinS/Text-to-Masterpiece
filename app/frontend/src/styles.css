@@ -822,12 +822,14 @@ html, body, #root {
   line-height: 1.4;
 }
 
-.auth-description {
-  margin: 0 0 26px;
+.auth-description { margin: 0 0 26px; }
+.auth-description, .auth-password-hint {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.7;
 }
+.auth-password-hint { display: none; }
+.auth-password-field:focus-within .auth-password-hint { display: block; }
 
 .auth-form { display: flex; flex-direction: column; gap: 18px; }
 .auth-field { display: flex; flex-direction: column; gap: 8px; }

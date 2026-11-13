@@ -120,7 +120,7 @@ export default function AuthModal({ onClose, onSubmit }: Props) {
               onChange={event => setEmail(event.target.value)} aria-invalid={!!errors.email} aria-describedby={errors.email ? `${id}-email-error` : undefined} />
             {errors.email && <span id={`${id}-email-error`} className="auth-error">{errors.email}</span>}
           </div>
-          <div className="auth-field">
+          <div className="auth-field auth-password-field">
             <label htmlFor={`${id}-password`}>Password</label>
             <div className="auth-password">
               <input id={`${id}-password`} type={visible ? 'text' : 'password'} autoComplete={signup ? 'new-password' : 'current-password'} required
@@ -130,7 +130,7 @@ export default function AuthModal({ onClose, onSubmit }: Props) {
                 {visible ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            {signup && <span id={`${id}-password-hint`}>{PASSWORD_REQUIREMENTS}</span>}
+            {signup && <span id={`${id}-password-hint`} className="auth-password-hint">{PASSWORD_REQUIREMENTS}</span>}
             {errors.password && <span id={`${id}-password-error`} className="auth-error">{errors.password}</span>}
           </div>
           {signup && <div className="auth-field">
