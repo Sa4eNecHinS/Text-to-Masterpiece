@@ -2,9 +2,9 @@
 
 **Text-to-Masterpiece (T2M)** — веб-приложение для генерации ваших шедевров по текстовому описанию .. 
 
-![начальная страница](app/backend/docs/home_page)
-![главная страница](app/backend/docs/main_page)
-![главная страница с открытой панелью](app/backend/docs/main_page_sidebar)
+![начальная страница](app/backend/docs/home_page.png)
+![главная страница](app/backend/docs/main_page.png)
+![главная страница с открытой панелью](app/backend/docs/main_page_sidebar.png)
 
 .. с поддержкой на v 0.1.0-beta:
 - пользовательских аккаунтов 
@@ -201,7 +201,7 @@ Iframe использует пустой sandbox, `no-referrer` и `credentialle
 
 ## Документация
 
-- [Внутреннее устройство backend](docs/backend-internals.md)
+- [Внутреннее устройство backend](app/backend/docs/backend-internals.md)
 - [Хранение изображений в B2](app/backend/B2_STORAGE.md)
 - [Пример переменных окружения](app/backend/.env.example)
 
