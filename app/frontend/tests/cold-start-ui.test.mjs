@@ -35,6 +35,16 @@ async function setup(t, initiallyAvailable = false, options = {}) {
   })
   t.mock.method(Math, 'random', () => 0.5)
   const oldStorage = globalThis.sessionStorage, oldAct = globalThis.IS_REACT_ACT_ENVIRONMENT
+  const oldDocument = globalThis.document
+  const wakeFrames = new Set()
+  let wakeCreations = 0
+  if (options.sleepingRender) globalThis.document = {
+    createElement() {
+      wakeCreations++
+      return { credentialless: false, setAttribute() {}, remove() { wakeFrames.delete(this) } }
+    },
+    body: { appendChild(frame) { wakeFrames.add(frame) } },
+  }
   const storage = new Map()
   if (options.selectedId) storage.set('ttm.current-chat.v3', JSON.stringify({
     owner: null, selectedId: options.selectedId, input: 'old saved draft', messages: [],
@@ -49,6 +59,7 @@ async function setup(t, initiallyAvailable = false, options = {}) {
   const calls = []
   const delayMs = options.delayMs ?? 0
   const selectedId = options.selectedId
+  const sleepingRender = options.sleepingRender
   t.mock.method(globalThis, 'fetch', async (path, options) => {
     options?.signal?.throwIfAborted()
     calls.push([path, options])
@@ -63,7 +74,9 @@ async function setup(t, initiallyAvailable = false, options = {}) {
       })
       available = true
     }
-    if (!available) return json({}, 503)
+    if (!available) return sleepingRender
+      ? new Response('Bad Gateway', { status: 502, headers: { 'x-render-routing': 'no-deploy' } })
+      : json({}, 503)
     if (path.endsWith('/models')) return json([{ model_id: 'cloudflare/flux-1-schnell', name: 'FLUX.1-schnell' }])
     if (path.endsWith('/users/me')) return json({}, 401)
     if (path.endsWith('/Text-to-Masterpiece')) return json({ ok: true })
@@ -112,6 +125,8 @@ async function setup(t, initiallyAvailable = false, options = {}) {
     }
     if (tree) await act(async () => tree.unmount())
     globalThis.sessionStorage = oldStorage
+    if (oldDocument === undefined) delete globalThis.document
+    else globalThis.document = oldDocument
     globalThis.IS_REACT_ACT_ENVIRONMENT = oldAct
   })
   await act(async () => {
@@ -123,7 +138,7 @@ async function setup(t, initiallyAvailable = false, options = {}) {
     )))
   })
   return {
-    tree, api, calls,
+    tree, api, calls, wakeFrames, wakeCreations: () => wakeCreations,
     text: () => JSON.stringify(tree.toJSON()),
     input: () => tree.root.findByType('ChatInput').props,
     auth: () => tree.root.findByType('AuthProbe').props,
@@ -136,7 +151,9 @@ async function setup(t, initiallyAvailable = false, options = {}) {
 }
 
 test('real Home Create navigation stays usable during cold start; StrictMode does not duplicate recovery or guests', async t => {
-  const app = await setup(t)
+  const app = await setup(t, false, { sleepingRender: true })
+  assert.equal(app.wakeCreations(), 1)
+  assert.equal(app.wakeFrames.size, 1)
   assert.doesNotMatch(app.text(), /Starting server|continue preparing your prompt/)
   assert.equal(app.calls.length, 1)
   await app.create()
@@ -150,6 +167,8 @@ test('real Home Create navigation stays usable during cold start; StrictMode doe
   app.available()
   await act(async () => { t.mock.timers.tick(1000); await flush() })
   assert.equal(app.api.getBackendState().status, 'ready')
+  assert.equal(app.wakeFrames.size, 0)
+  assert.equal(app.wakeCreations(), 1)
   assert.doesNotMatch(app.text(), /Starting server|The server is starting/)
   assert.equal(app.input().value, 'a draft before the server wakes')
   assert.equal(app.input().modelSelect.models.length, 1)
@@ -162,6 +181,16 @@ test('real Home Create navigation stays usable during cold start; StrictMode doe
   const count = app.calls.length
   await act(async () => { t.mock.timers.tick(600_000); await flush() })
   assert.equal(app.calls.length, count)
+})
+
+test('AuthProvider unmount removes the wake frame without recreating it on later probes', async t => {
+  const app = await setup(t, false, { sleepingRender: true })
+  assert.equal(app.wakeFrames.size, 1)
+  await act(async () => app.tree.unmount())
+  assert.equal(app.wakeFrames.size, 0)
+  await act(async () => { t.mock.timers.tick(1000); await flush() })
+  assert.equal(app.wakeCreations(), 1)
+  assert.equal(app.wakeFrames.size, 0)
 })
 
 test('exhaustion exposes Try again; clicking it restores failed views without losing the draft or posting', async t => {

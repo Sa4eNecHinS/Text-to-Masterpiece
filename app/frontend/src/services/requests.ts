@@ -295,6 +295,48 @@ let backendState: BackendState = { status: 'idle', retryVersion: 0 }
 const backendListeners = new Set<() => void>()
 let recoveryEnabled = false
 let recoveryCycle: Promise<void> | undefined
+let wakeFrame: HTMLIFrameElement | undefined
+let wakeFrameOwners = 0
+
+function removeWakeFrame() {
+  wakeFrame?.remove()
+  wakeFrame = undefined
+}
+
+// The application owns the DOM side effect; unmounting must not cancel the
+// shared readiness promise used by other readers. StrictMode replays are safe.
+export function retainBackendWakeFrame(): () => void {
+  wakeFrameOwners++
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--wakeFrameOwners === 0) removeWakeFrame()
+  }
+}
+
+function tryWakeRender() {
+  if (!wakeFrameOwners || typeof document === 'undefined') return
+  try {
+    const frame = document.createElement('iframe')
+    // Sandbox alone does NOT omit cookies. Unsupported browsers must fall back
+    // to ordinary Worker probes, rather than navigate with Render credentials.
+    if (!('credentialless' in frame)) return
+    frame.setAttribute('credentialless', '')
+    frame.setAttribute('sandbox', '')
+    frame.referrerPolicy = 'no-referrer'
+    frame.hidden = true
+    frame.setAttribute('aria-hidden', 'true')
+    frame.tabIndex = -1
+    frame.src = 'https://ttm-backend-du5g.onrender.com/Text-to-Masterpiece/models'
+    wakeFrame = frame
+    document.body.appendChild(frame)
+    // No load/error handlers: navigation is an experimental wake hint, never
+    // evidence of readiness. CSP / frame-ancestors may silently block it.
+  } catch {
+    removeWakeFrame()
+  }
+}
 
 export const getBackendState = () => backendState
 export function subscribeBackend(listener: () => void) {
@@ -350,6 +392,7 @@ function beginReadiness(manual = false, deadline = Date.now() + RECOVERY_BUDGET_
   readinessLog('cycle-start', { budgetMs: Math.max(0, deadline - started) })
   recoveryCycle = (async () => {
     let attempt = 0
+    let wakeAttempted = false
     while (Date.now() < deadline) {
       const requestStarted = Date.now()
       let status = 0
@@ -358,6 +401,11 @@ function beginReadiness(manual = false, deadline = Date.now() + RECOVERY_BUDGET_
           signal: AbortSignal.timeout(Math.max(1, Math.min(READ_TIMEOUT_MS, deadline - Date.now()))),
         })
         status = response.status
+        if (!wakeAttempted && status === 502
+          && response.headers.get('x-render-routing')?.trim().toLowerCase() === 'no-deploy') {
+          wakeAttempted = true
+          tryWakeRender()
+        }
         if (!response.ok) throw new ProbeHTTPError(status)
         await readModelCatalogue(response) // Includes body read/JSON validation in the timeout.
         if (Date.now() >= deadline) throw new DOMException('Readiness budget exhausted', 'TimeoutError')
@@ -380,7 +428,10 @@ function beginReadiness(manual = false, deadline = Date.now() + RECOVERY_BUDGET_
     readinessLog('cycle-unavailable', { reason: 'budget-exhausted', elapsedMs: Date.now() - started })
     publishBackend('unavailable')
     throw unavailableError()
-  })().finally(() => { recoveryCycle = undefined })
+  })().finally(() => {
+    removeWakeFrame()
+    recoveryCycle = undefined
+  })
   return recoveryCycle
 }
 

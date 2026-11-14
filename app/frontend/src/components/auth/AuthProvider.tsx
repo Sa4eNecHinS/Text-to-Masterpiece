@@ -1,5 +1,5 @@
 import { useLayoutEffect, useState, type ReactNode } from 'react'
-import { initializeSession, rememberSession, resetSession, logoutUser, loginUser, registerUser, startBackendReadiness, type User } from '@/services/requests'
+import { initializeSession, rememberSession, resetSession, logoutUser, loginUser, registerUser, startBackendReadiness, retainBackendWakeFrame, type User } from '@/services/requests'
 import { AuthContext, type AuthMode } from './authContext'
 import { useBackendReadiness } from '@/components/useBackendReadiness'
 
@@ -12,13 +12,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // StrictMode replays join the same promise rather than starting another loop.
   useLayoutEffect(() => {
     let active = true
+    const releaseWakeFrame = retainBackendWakeFrame()
     void startBackendReadiness().catch(() => {})
     initializeSession().then(user => {
       if (active) { setUser(user); setSessionError('') }
     }).catch(error => {
       if (active) setSessionError(error instanceof Error ? error.message : 'Unable to restore your session.')
     })
-    return () => { active = false }
+    return () => { active = false; releaseWakeFrame() }
   }, [backend.retryVersion])
 
   const authenticate = async (mode: AuthMode, email: string, password: string): Promise<void> => {

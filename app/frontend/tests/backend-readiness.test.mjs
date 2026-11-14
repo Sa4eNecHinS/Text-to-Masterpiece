@@ -29,6 +29,150 @@ async function exhaust(t, api) {
   assert.equal(api.getBackendState().status, 'unavailable')
 }
 
+// Minimal DOM double: Node has no iframe implementation or browser navigation.
+function wakeDOM(t, { supported = true, blocked = false } = {}) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  const created = [], attached = new Set()
+  const document = {
+    createElement(tag) {
+      assert.equal(tag, 'iframe')
+      const frame = {
+        ...(supported ? { credentialless: false } : {}),
+        attributes: {},
+        setAttribute(name, value) { this.attributes[name] = value },
+        remove() { attached.delete(this) },
+      }
+      created.push(frame)
+      return frame
+    },
+    body: { appendChild(frame) {
+      if (blocked) throw new Error('CSP blocked navigation')
+      attached.add(frame)
+    } },
+  }
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: document })
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, 'document', original)
+    else delete globalThis.document
+  })
+  return { created, attached }
+}
+const sleepingRender = () => new Response('Bad Gateway', {
+  status: 502, headers: { 'x-render-routing': 'no-deploy' },
+})
+
+test('Render wake is once per shared cycle; only valid Worker JSON restores session, models and history', async t => {
+  const api = await apiModule(t)
+  const dom = wakeDOM(t)
+  const release = api.retainBackendWakeFrame()
+  t.after(release)
+  let probes = 0
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push([url, options])
+    if (url.endsWith('/models')) {
+      if (++probes <= 2) return sleepingRender()
+      if (probes === 3) return new Response('<html>Not ready</html>')
+      return json(models)
+    }
+    if (url.endsWith('/users/me')) return json({ id: 1, email: 'owner@example.com' })
+    if (url.includes('/chats?')) return json([])
+    throw new Error(`Unexpected URL: ${url}`)
+  })
+  const ready = api.startBackendReadiness()
+  const second = api.startBackendReadiness()
+  const catalogue = api.getModels(), session = api.initializeSession(), history = api.getChats()
+  await flush()
+  assert.equal(dom.created.length, 1)
+  assert.equal(dom.attached.size, 1)
+  const frame = dom.created[0]
+  assert.equal(frame.src, 'https://ttm-backend-du5g.onrender.com/Text-to-Masterpiece/models')
+  assert.deepEqual(frame.attributes, { credentialless: '', sandbox: '', 'aria-hidden': 'true' })
+  assert.equal(frame.referrerPolicy, 'no-referrer')
+  assert.equal(frame.hidden, true)
+  assert.equal(frame.onload, undefined)
+  assert.equal(frame.onerror, undefined)
+  assert.equal(api.getBackendState().status, 'starting')
+  for (const delay of [1000, 2000]) {
+    t.mock.timers.tick(delay)
+    await flush()
+    assert.equal(dom.created.length, 1)
+    assert.equal(dom.attached.size, 1)
+    assert.equal(api.getBackendState().status, 'starting')
+  }
+  t.mock.timers.tick(4000)
+  await Promise.all([ready, second, catalogue, session, history])
+  assert.equal(dom.attached.size, 0)
+  assert.equal(api.getBackendState().status, 'ready')
+  assert.ok(calls.every(([url, options]) => url.startsWith('/api/') && !options.method))
+  const count = calls.length
+  t.mock.timers.tick(600_000)
+  await flush()
+  assert.equal(calls.length, count)
+})
+
+for (const [status, routing] of [[502, null], [502, 'other'], [503, 'no-deploy'], [200, 'no-deploy']]) {
+  test(`no iframe for HTTP ${status} with routing ${routing}`, async t => {
+    const api = await apiModule(t)
+    const dom = wakeDOM(t)
+    const release = api.retainBackendWakeFrame()
+    t.after(release)
+    let attempts = 0
+    t.mock.method(globalThis, 'fetch', async () => ++attempts === 1
+      ? new Response(JSON.stringify(models), { status, headers: routing ? { 'x-render-routing': routing } : {} })
+      : json(models))
+    const ready = api.startBackendReadiness()
+    await flush()
+    t.mock.timers.tick(1000)
+    await ready
+    assert.equal(dom.created.length, 0)
+  })
+}
+
+for (const ending of ['error', 'budget', 'unmount', 'blocked', 'unsupported']) {
+  test(`wake iframe cleanup/fallback: ${ending}`, async t => {
+    const api = await apiModule(t)
+    const dom = wakeDOM(t, { supported: ending !== 'unsupported', blocked: ending === 'blocked' })
+    const release = api.retainBackendWakeFrame()
+    t.after(release)
+    let attempts = 0
+    t.mock.method(globalThis, 'fetch', async () => {
+      if (++attempts === 1 || ending === 'budget' || ending === 'unmount') return sleepingRender()
+      return ending === 'error' ? json({}, 500) : json(models)
+    })
+    const outcome = api.startBackendReadiness().catch(error => error)
+    await flush()
+    assert.equal(dom.created.length, 1)
+    if (ending === 'unmount') { release(); release() }
+    if (['unmount', 'blocked', 'unsupported'].includes(ending)) assert.equal(dom.attached.size, 0)
+    if (ending === 'budget' || ending === 'unmount') await exhaust(t, api)
+    else { t.mock.timers.tick(1000); await flush() }
+    const result = await outcome
+    if (ending === 'error') assert.match(result.message, /HTTP 500/)
+    else if (ending === 'budget' || ending === 'unmount') assert.match(result.message, /temporarily unavailable/)
+    else assert.equal(api.getBackendState().status, 'ready')
+    assert.equal(dom.created.length, 1)
+    assert.equal(dom.attached.size, 0)
+  })
+}
+
+test('unmount before the routing response prevents late iframe creation', async t => {
+  const api = await apiModule(t)
+  const dom = wakeDOM(t)
+  const release = api.retainBackendWakeFrame()
+  let respond
+  t.mock.method(globalThis, 'fetch', () => new Promise(resolve => { respond = resolve }))
+  const ready = api.startBackendReadiness().catch(error => error)
+  release()
+  respond(sleepingRender())
+  await flush()
+  t.mock.timers.tick(1000)
+  await flush()
+  respond(json(models))
+  await ready
+  assert.equal(dom.created.length, 0)
+})
+
 test('immediate readiness probes once, shares callers and never keeps Render awake', async t => {
   const api = await apiModule(t)
   const fetch = t.mock.method(globalThis, 'fetch', async () => json(models))
