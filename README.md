@@ -18,7 +18,7 @@
 
 Проект включает React-фронтенд, REST API на FastAPI, PostgreSQL, приватное объектное хранилище и интеграцию с Cloudflare Workers AI.
 
-**[Открыть приложение](https://text-to-masterpiece.sanek-evteev2002.workers.dev)** · [Исходный код](https://github.com/Sa4eNecHinS/Text-to-Masterpiece)
+**[Открыть приложение](https://text-to-masterpiece.sanek-evteev2002.workers.dev)** · 
 
 **Статус:** beta — основная функциональность доступна, проект продолжает развиваться.
 
