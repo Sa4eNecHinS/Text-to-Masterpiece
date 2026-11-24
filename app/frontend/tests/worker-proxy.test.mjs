@@ -118,14 +118,16 @@ test('proxy preserves a pending response stream and multiple Set-Cookie fields w
   assert.equal((await reader.read()).done, true)
 })
 
-for (const status of [500, 502, 503, 504, 520, 522, 524]) {
+for (const status of [429, 500, 502, 503, 504, 520, 522, 524]) {
   test(`proxy passes upstream HTTP ${status} through unchanged without retrying`, async t => {
     const { default: worker } = await loadWorker()
-    const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('upstream', {
-      status, headers: status === 502 ? { 'x-render-routing': 'no-deploy' } : {},
-    }))
+    const headers = new Headers()
+    if (status === 429) headers.set('Retry-After', '15')
+    if (status === 502) headers.set('x-render-routing', 'no-deploy')
+    const fetch = t.mock.method(globalThis, 'fetch', async () => new Response('upstream', { status, headers }))
     const response = await worker.fetch(new Request('https://app.example/api/Text-to-Masterpiece/models'))
     assert.equal(response.status, status)
+    assert.equal(response.headers.get('Retry-After'), status === 429 ? '15' : null)
     assert.equal(response.headers.get('x-render-routing'), status === 502 ? 'no-deploy' : null)
     assert.equal(await response.text(), 'upstream')
     assert.equal(fetch.mock.callCount(), 1)

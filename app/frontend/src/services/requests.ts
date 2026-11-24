@@ -1,13 +1,16 @@
 export const API_BASE_URL =
   import.meta.env.VITE_API_URL ?? '/api'
 
+const MODELS_PATH = '/Text-to-Masterpiece/models'
+const RENDER_ORIGIN = 'https://ttm-backend-du5g.onrender.com' // Direct origin, not the Worker API base.
+
 
 export type ImageModel = { model_id: string; name: string }
 export type GenerateResponse = { chat_id: string; generation_id: number; model_id: string; model_name: string }
 export type ChatSummary = { id: string; title: string; created_at: string; updated_at: string }
 
 export async function getModels(signal?: AbortSignal): Promise<ImageModel[]> {
-  const response = await readAPI(`${API_BASE_URL}/Text-to-Masterpiece/models`, { signal }, readModelCatalogue)
+  const response = await readAPI(`${API_BASE_URL}${MODELS_PATH}`, { signal }, readModelCatalogue)
   if (!response.ok) throw new Error((await responseDetail(response)) || `Unable to load models (HTTP ${response.status}).`)
   return readModelCatalogue(response)
 }
@@ -295,47 +298,16 @@ let backendState: BackendState = { status: 'idle', retryVersion: 0 }
 const backendListeners = new Set<() => void>()
 let recoveryEnabled = false
 let recoveryCycle: Promise<void> | undefined
-let wakeFrame: HTMLIFrameElement | undefined
-let wakeFrameOwners = 0
-
-function removeWakeFrame() {
-  wakeFrame?.remove()
-  wakeFrame = undefined
-}
-
-// The application owns the DOM side effect; unmounting must not cancel the
-// shared readiness promise used by other readers. StrictMode replays are safe.
-export function retainBackendWakeFrame(): () => void {
-  wakeFrameOwners++
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    if (--wakeFrameOwners === 0) removeWakeFrame()
-  }
-}
 
 function tryWakeRender() {
-  if (!wakeFrameOwners || typeof document === 'undefined') return
-  try {
-    const frame = document.createElement('iframe')
-    // Sandbox alone does NOT omit cookies. Unsupported browsers must fall back
-    // to ordinary Worker probes, rather than navigate with Render credentials.
-    if (!('credentialless' in frame)) return
-    frame.setAttribute('credentialless', '')
-    frame.setAttribute('sandbox', '')
-    frame.referrerPolicy = 'no-referrer'
-    frame.hidden = true
-    frame.setAttribute('aria-hidden', 'true')
-    frame.tabIndex = -1
-    frame.src = 'https://ttm-backend-du5g.onrender.com/Text-to-Masterpiece/models'
-    wakeFrame = frame
-    document.body.appendChild(frame)
-    // No load/error handlers: navigation is an experimental wake hint, never
-    // evidence of readiness. CSP / frame-ancestors may silently block it.
-  } catch {
-    removeWakeFrame()
-  }
+  // Best-effort hint only. Neither an opaque response nor a network/CSP failure
+  // changes readiness, and Worker probes must not wait for this request.
+  void fetch(`${RENDER_ORIGIN}${MODELS_PATH}`, {
+    mode: 'no-cors',
+    credentials: 'omit',
+    cache: 'no-store',
+    referrerPolicy: 'no-referrer',
+  }).catch(() => {})
 }
 
 export const getBackendState = () => backendState
@@ -349,10 +321,18 @@ function publishBackend(status: BackendState['status'], manualSuccess = false) {
 }
 class ProbeHTTPError extends Error {
   status: number
-  constructor(status: number) {
-    super(`Server readiness check failed (HTTP ${status}).`)
-    this.status = status
+  retryAfterMs: number
+  constructor(response: Response) {
+    super(`Server readiness check failed (HTTP ${response.status}).`)
+    this.status = response.status
+    this.retryAfterMs = parseRetryAfter(response.headers.get('Retry-After'))
   }
+}
+function parseRetryAfter(header: string | null): number {
+  const value = header?.trim() ?? ''
+  if (/^\d+$/.test(value)) return Number(value) * 1000
+  const date = /^[a-z]/i.test(value) ? Date.parse(value) : NaN
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0
 }
 const RECOVERY_BUDGET_MS = 120_000
 const READ_TIMEOUT_MS = 65_000 // Allow Render's 50–60s cold start in a single request.
@@ -378,8 +358,10 @@ function readinessLog(event: string, fields: Record<string, string | number> = {
   if (import.meta.env.DEV) console.debug('[backend-readiness]', event, fields)
 }
 function unavailableError() { return new Error('Server temporarily unavailable') }
-async function retryDelay(attempt: number, deadline: number, phase: string, reason: string) {
-  const delayMs = Math.max(0, Math.min(deadline - Date.now(), Math.min(10_000, 1000 * 2 ** Math.min(attempt, 4)) * (0.8 + Math.random() * 0.4)))
+async function retryDelay(attempt: number, deadline: number, phase: string, reason: string, error: unknown) {
+  const backoff = Math.min(10_000, 1000 * 2 ** Math.min(attempt, 4)) * (0.8 + Math.random() * 0.4)
+  const retryAfter = error instanceof ProbeHTTPError ? error.retryAfterMs : 0
+  const delayMs = Math.max(0, Math.min(deadline - Date.now(), Math.max(backoff, retryAfter)))
   readinessLog('retry', { phase, reason, delayMs, remainingMs: Math.max(0, deadline - Date.now()) })
   if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs))
 }
@@ -397,16 +379,15 @@ function beginReadiness(manual = false, deadline = Date.now() + RECOVERY_BUDGET_
       const requestStarted = Date.now()
       let status = 0
       try {
-        const response = await fetch(`${API_BASE_URL}/Text-to-Masterpiece/models`, {
+        const response = await fetch(`${API_BASE_URL}${MODELS_PATH}`, {
           signal: AbortSignal.timeout(Math.max(1, Math.min(READ_TIMEOUT_MS, deadline - Date.now()))),
         })
         status = response.status
-        if (!wakeAttempted && status === 502
-          && response.headers.get('x-render-routing')?.trim().toLowerCase() === 'no-deploy') {
+        if (!wakeAttempted && [429, 502, 503, 504].includes(status) && Date.now() < deadline) {
           wakeAttempted = true
           tryWakeRender()
         }
-        if (!response.ok) throw new ProbeHTTPError(status)
+        if (status !== 200) throw new ProbeHTTPError(response)
         await readModelCatalogue(response) // Includes body read/JSON validation in the timeout.
         if (Date.now() >= deadline) throw new DOMException('Readiness budget exhausted', 'TimeoutError')
         readinessLog('probe-end', { attempt, status, durationMs: Date.now() - requestStarted })
@@ -416,20 +397,22 @@ function beginReadiness(manual = false, deadline = Date.now() + RECOVERY_BUDGET_
       } catch (error) {
         const reason = failureReason(error)
         readinessLog('probe-end', { attempt, status, reason, durationMs: Date.now() - requestStarted })
-        if (!transientFailure(error)) {
+        // A 429 is transient here only: ordinary API reads and mutations can
+        // hit application rate limits and must not trigger the wake mechanism.
+        const probeRateLimited = error instanceof ProbeHTTPError && error.status === 429
+        if (!probeRateLimited && !transientFailure(error)) {
           readinessLog('cycle-error', { reason, elapsedMs: Date.now() - started })
           publishBackend('error') // In particular, HTTP 500 is an application error, not cold start.
           throw error
         }
         publishBackend('starting')
-        await retryDelay(attempt++, deadline, 'probe', reason)
+        await retryDelay(attempt++, deadline, 'probe', reason, error)
       }
     }
     readinessLog('cycle-unavailable', { reason: 'budget-exhausted', elapsedMs: Date.now() - started })
     publishBackend('unavailable')
     throw unavailableError()
   })().finally(() => {
-    removeWakeFrame()
     recoveryCycle = undefined
   })
   return recoveryCycle
@@ -478,7 +461,7 @@ async function readAPI(url: string, options: RequestInit = {}, validate?: (respo
       const timeout = AbortSignal.timeout(Math.max(1, Math.min(READ_TIMEOUT_MS, deadline - Date.now())))
       const response = await fetch(url, { ...options, signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
       status = response.status
-      if (transientStatus(status)) throw new ProbeHTTPError(status)
+      if (transientStatus(status)) throw new ProbeHTTPError(response)
       if (response.ok && validate) await validate(response.clone())
       readinessLog('read-end', { resource, attempt, status, durationMs: Date.now() - requestStarted, elapsedMs: Date.now() - started })
       return response
@@ -489,7 +472,7 @@ async function readAPI(url: string, options: RequestInit = {}, validate?: (respo
       publishBackend('starting')
       // A failed replay is not proof that the whole 120s budget is exhausted.
       // Rate-limit even when the readiness probe itself returns immediately.
-      await abortable(retryDelay(attempt, deadline, `read/${resource}`, reason), signal)
+      await abortable(retryDelay(attempt, deadline, `read/${resource}`, reason, error), signal)
       if (Date.now() < deadline) await abortable(beginReadiness(false, deadline), signal)
     }
   }

@@ -29,148 +29,90 @@ async function exhaust(t, api) {
   assert.equal(api.getBackendState().status, 'unavailable')
 }
 
-// Minimal DOM double: Node has no iframe implementation or browser navigation.
-function wakeDOM(t, { supported = true, blocked = false } = {}) {
-  const original = Object.getOwnPropertyDescriptor(globalThis, 'document')
-  const created = [], attached = new Set()
-  const document = {
-    createElement(tag) {
-      assert.equal(tag, 'iframe')
-      const frame = {
-        ...(supported ? { credentialless: false } : {}),
-        attributes: {},
-        setAttribute(name, value) { this.attributes[name] = value },
-        remove() { attached.delete(this) },
-      }
-      created.push(frame)
-      return frame
-    },
-    body: { appendChild(frame) {
-      if (blocked) throw new Error('CSP blocked navigation')
-      attached.add(frame)
-    } },
-  }
-  Object.defineProperty(globalThis, 'document', { configurable: true, value: document })
-  t.after(() => {
-    if (original) Object.defineProperty(globalThis, 'document', original)
-    else delete globalThis.document
-  })
-  return { created, attached }
-}
-const sleepingRender = () => new Response('Bad Gateway', {
-  status: 502, headers: { 'x-render-routing': 'no-deploy' },
-})
+const workerModels = '/api/Text-to-Masterpiece/models'
+const renderModels = 'https://ttm-backend-du5g.onrender.com/Text-to-Masterpiece/models'
+const wakeStatuses = [429, 502, 503, 504]
 
-test('Render wake is once per shared cycle; only valid Worker JSON restores session, models and history', async t => {
-  const api = await apiModule(t)
-  const dom = wakeDOM(t)
-  const release = api.retainBackendWakeFrame()
-  t.after(release)
-  let probes = 0
-  const calls = []
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
-    calls.push([url, options])
-    if (url.endsWith('/models')) {
-      if (++probes <= 2) return sleepingRender()
+for (const wake of ['opaque response', 'pending request', 'network error']) {
+  test(`Render wake (${wake}) does not determine readiness or delay Worker probes`, async t => {
+    const api = await apiModule(t)
+    let directRequests = 0
+    let probes = 0
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+      if (url === renderModels) {
+        directRequests++
+        assert.deepEqual(options, {
+          mode: 'no-cors', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
+        })
+        if (wake === 'pending request') return new Promise(() => {})
+        if (wake === 'network error') throw new TypeError('Failed to fetch Render')
+        return { type: 'opaque', status: 0 }
+      }
+      assert.equal(url, workerModels)
+      if (++probes <= 2) return json({}, 429)
       if (probes === 3) return new Response('<html>Not ready</html>')
       return json(models)
-    }
-    if (url.endsWith('/users/me')) return json({ id: 1, email: 'owner@example.com' })
-    if (url.includes('/chats?')) return json([])
-    throw new Error(`Unexpected URL: ${url}`)
-  })
-  const ready = api.startBackendReadiness()
-  const second = api.startBackendReadiness()
-  const catalogue = api.getModels(), session = api.initializeSession(), history = api.getChats()
-  await flush()
-  assert.equal(dom.created.length, 1)
-  assert.equal(dom.attached.size, 1)
-  const frame = dom.created[0]
-  assert.equal(frame.src, 'https://ttm-backend-du5g.onrender.com/Text-to-Masterpiece/models')
-  assert.deepEqual(frame.attributes, { credentialless: '', sandbox: '', 'aria-hidden': 'true' })
-  assert.equal(frame.referrerPolicy, 'no-referrer')
-  assert.equal(frame.hidden, true)
-  assert.equal(frame.onload, undefined)
-  assert.equal(frame.onerror, undefined)
-  assert.equal(api.getBackendState().status, 'starting')
-  for (const delay of [1000, 2000]) {
-    t.mock.timers.tick(delay)
+    })
+    const ready = api.startBackendReadiness()
+    assert.equal(api.startBackendReadiness(), ready)
     await flush()
-    assert.equal(dom.created.length, 1)
-    assert.equal(dom.attached.size, 1)
     assert.equal(api.getBackendState().status, 'starting')
-  }
-  t.mock.timers.tick(4000)
-  await Promise.all([ready, second, catalogue, session, history])
-  assert.equal(dom.attached.size, 0)
-  assert.equal(api.getBackendState().status, 'ready')
-  assert.ok(calls.every(([url, options]) => url.startsWith('/api/') && !options.method))
-  const count = calls.length
-  t.mock.timers.tick(600_000)
-  await flush()
-  assert.equal(calls.length, count)
-})
+    for (const delay of [1000, 2000]) {
+      assert.equal(directRequests, 1)
+      t.mock.timers.tick(delay)
+      await flush()
+      assert.equal(api.getBackendState().status, 'starting')
+    }
+    t.mock.timers.tick(4000)
+    await ready
+    assert.equal(api.getBackendState().status, 'ready')
+    assert.equal(directRequests, 1)
+    assert.equal(probes, 4)
+  })
+}
 
-for (const [status, routing] of [[502, null], [502, 'other'], [503, 'no-deploy'], [200, 'no-deploy']]) {
-  test(`no iframe for HTTP ${status} with routing ${routing}`, async t => {
+for (const [header, delay] of [['4', 4000], [new Date(5000).toUTCString(), 5000], ['0', 1000], ['-1', 1000]]) {
+  test(`readiness backoff honors Retry-After: ${header}`, async t => {
     const api = await apiModule(t)
-    const dom = wakeDOM(t)
-    const release = api.retainBackendWakeFrame()
-    t.after(release)
-    let attempts = 0
-    t.mock.method(globalThis, 'fetch', async () => ++attempts === 1
-      ? new Response(JSON.stringify(models), { status, headers: routing ? { 'x-render-routing': routing } : {} })
-      : json(models))
+    let probes = 0
+    t.mock.method(globalThis, 'fetch', async url => {
+      if (url === renderModels) return { type: 'opaque', status: 0 }
+      assert.equal(url, workerModels)
+      if (++probes === 1) return new Response(null, { status: 429, headers: { 'Retry-After': header } })
+      return json(models)
+    })
     const ready = api.startBackendReadiness()
     await flush()
-    t.mock.timers.tick(1000)
-    await ready
-    assert.equal(dom.created.length, 0)
-  })
-}
-
-for (const ending of ['error', 'budget', 'unmount', 'blocked', 'unsupported']) {
-  test(`wake iframe cleanup/fallback: ${ending}`, async t => {
-    const api = await apiModule(t)
-    const dom = wakeDOM(t, { supported: ending !== 'unsupported', blocked: ending === 'blocked' })
-    const release = api.retainBackendWakeFrame()
-    t.after(release)
-    let attempts = 0
-    t.mock.method(globalThis, 'fetch', async () => {
-      if (++attempts === 1 || ending === 'budget' || ending === 'unmount') return sleepingRender()
-      return ending === 'error' ? json({}, 500) : json(models)
-    })
-    const outcome = api.startBackendReadiness().catch(error => error)
+    t.mock.timers.tick(delay - 1)
     await flush()
-    assert.equal(dom.created.length, 1)
-    if (ending === 'unmount') { release(); release() }
-    if (['unmount', 'blocked', 'unsupported'].includes(ending)) assert.equal(dom.attached.size, 0)
-    if (ending === 'budget' || ending === 'unmount') await exhaust(t, api)
-    else { t.mock.timers.tick(1000); await flush() }
-    const result = await outcome
-    if (ending === 'error') assert.match(result.message, /HTTP 500/)
-    else if (ending === 'budget' || ending === 'unmount') assert.match(result.message, /temporarily unavailable/)
-    else assert.equal(api.getBackendState().status, 'ready')
-    assert.equal(dom.created.length, 1)
-    assert.equal(dom.attached.size, 0)
+    assert.equal(probes, 1)
+    t.mock.timers.tick(1)
+    await ready
+    assert.equal(probes, 2)
   })
 }
 
-test('unmount before the routing response prevents late iframe creation', async t => {
+test('Retry-After cannot extend the readiness budget or start another wake before manual retry', async t => {
   const api = await apiModule(t)
-  const dom = wakeDOM(t)
-  const release = api.retainBackendWakeFrame()
-  let respond
-  t.mock.method(globalThis, 'fetch', () => new Promise(resolve => { respond = resolve }))
-  const ready = api.startBackendReadiness().catch(error => error)
-  release()
-  respond(sleepingRender())
+  const fetch = t.mock.method(globalThis, 'fetch', async url => url === renderModels
+    ? new Promise(() => {})
+    : new Response(null, { status: 429, headers: { 'Retry-After': '180' } }))
+  const failure = assert.rejects(api.startBackendReadiness(), /Server temporarily unavailable/)
   await flush()
-  t.mock.timers.tick(1000)
+  t.mock.timers.tick(119_999)
   await flush()
-  respond(json(models))
-  await ready
-  assert.equal(dom.created.length, 0)
+  assert.equal(api.getBackendState().status, 'starting')
+  t.mock.timers.tick(1)
+  await failure
+  assert.equal(api.getBackendState().status, 'unavailable')
+  await assert.rejects(api.startBackendReadiness(), /Server temporarily unavailable/)
+  assert.deepEqual(fetch.mock.calls.map(call => call.arguments[0]), [workerModels, renderModels])
+
+  const retry = assert.rejects(api.retryBackendReadiness(), /Server temporarily unavailable/)
+  await flush()
+  assert.deepEqual(fetch.mock.calls.map(call => call.arguments[0]), [workerModels, renderModels, workerModels, renderModels])
+  t.mock.timers.tick(120_000)
+  await retry
 })
 
 test('immediate readiness probes once, shares callers and never keeps Render awake', async t => {
@@ -184,7 +126,7 @@ test('immediate readiness probes once, shares callers and never keeps Render awa
   assert.equal(fetch.mock.callCount(), 1)
 })
 
-for (const failure of [502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530,
+for (const failure of [...wakeStatuses, 520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530,
   'network', 'timeout', 'abort', 'html', 'malformed-json', 'invalid-catalogue']) {
   test(`recovers from ${failure} using one shared backoff cycle`, async t => {
     const api = await apiModule(t)
@@ -193,7 +135,8 @@ for (const failure of [502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 52
     t.mock.method(globalThis, 'fetch', async (url, options) => {
       calls.push([url, options])
       assert.equal(options?.method, undefined)
-      if (url.endsWith('/models') && ++attempts === 1) {
+      if (url === renderModels) return { type: 'opaque', status: 0 }
+      if (url === workerModels && ++attempts === 1) {
         if (failure === 'network') throw new TypeError('Failed to fetch')
         if (failure === 'timeout') throw new DOMException('Timeout', 'TimeoutError')
         if (failure === 'abort') throw new DOMException('Aborted', 'AbortError')
@@ -214,14 +157,16 @@ for (const failure of [502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 52
     const chats = api.getChats()
     await flush()
     assert.equal(api.getBackendState().status, 'starting')
-    assert.equal(calls.length, 1)
+    const initialCalls = wakeStatuses.includes(failure) ? [workerModels, renderModels] : [workerModels]
+    assert.deepEqual(calls.map(([url]) => url), initialCalls)
     t.mock.timers.tick(999)
     await flush()
-    assert.equal(calls.length, 1)
+    assert.deepEqual(calls.map(([url]) => url), initialCalls)
     t.mock.timers.tick(1)
     await Promise.all([first, second, catalogue, session, chats])
     assert.equal(api.getBackendState().status, 'ready')
-    assert.equal(calls.filter(([url]) => url.endsWith('/models')).length, 3) // 2 probes + catalogue.
+    assert.equal(calls.filter(([url]) => url === workerModels).length, 3) // 2 probes + catalogue.
+    assert.equal(calls.filter(([url]) => url === renderModels).length, initialCalls.length - 1)
     assert.equal(calls.filter(([url]) => url.endsWith('/users/me')).length, 1)
     assert.equal(calls.filter(([url]) => url.includes('/chats?')).length, 1)
     assert.ok(calls.every(([, options]) => !options?.method || options.method === 'GET'))
@@ -337,6 +282,7 @@ test('120 second budget stops retry; manual retry resumes failed session, models
   const calls = []
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     calls.push([url, options])
+    if (url === renderModels) return { type: 'opaque', status: 0 }
     if (!available) return json({}, 503)
     if (url.endsWith('/models')) return json(models)
     if (url.endsWith('/users/me')) return json({}, 401)
@@ -368,7 +314,7 @@ test('120 second budget stops retry; manual retry resumes failed session, models
   assert.ok(calls.every(([, options]) => options?.method !== 'POST'))
 })
 
-for (const status of [401, 403, 404, 500]) {
+for (const status of [201, 401, 403, 404, 500]) {
   test(`readiness HTTP ${status} is not classified as cold start or retried`, async t => {
     const api = await apiModule(t)
     const fetch = t.mock.method(globalThis, 'fetch', async () => json({}, status))
@@ -380,19 +326,25 @@ for (const status of [401, 403, 404, 500]) {
   })
 }
 
-test('safe session read retries after a transient failure; guest creation is not replayed', async t => {
+test('safe session read retries a 503 after Retry-After; guest creation is not replayed', async t => {
   const api = await apiModule(t)
   let meCalls = 0, guestCalls = 0
   t.mock.method(globalThis, 'fetch', async url => {
-    if (url.endsWith('/models')) return json(models)
-    if (url.endsWith('/users/me')) return ++meCalls === 1 ? json({}, 503) : json({}, 401)
+    if (url === workerModels) return json(models)
+    if (url.endsWith('/users/me')) return ++meCalls === 1
+      ? new Response(null, { status: 503, headers: { 'Retry-After': '3' } })
+      : json({}, 401)
     guestCalls++
     throw new TypeError('Lost guest acknowledgement')
   })
   await api.startBackendReadiness()
   const failure = assert.rejects(api.initializeSession(), /Lost guest acknowledgement/)
   await flush()
-  t.mock.timers.tick(1000)
+  t.mock.timers.tick(2999)
+  await flush()
+  assert.equal(meCalls, 1)
+  assert.equal(guestCalls, 0)
+  t.mock.timers.tick(1)
   await failure
   assert.equal(meCalls, 2)
   assert.equal(guestCalls, 1)
@@ -447,7 +399,10 @@ test('repeated endpoint 503 cannot create an infinite probe/read loop', async t 
 test('aborting one view does not cancel the shared recovery loop', async t => {
   const api = await apiModule(t)
   let calls = 0
-  t.mock.method(globalThis, 'fetch', async () => ++calls === 1 ? json({}, 503) : json(models))
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (url === renderModels) return { type: 'opaque', status: 0 }
+    return ++calls === 1 ? json({}, 503) : json(models)
+  })
   const ready = api.startBackendReadiness()
   const controller = new AbortController()
   const cancelled = api.getModels(controller.signal)
@@ -458,6 +413,27 @@ test('aborting one view does not cancel the shared recovery loop', async t => {
   await ready
   assert.equal(api.getBackendState().status, 'ready')
   assert.equal(calls, 2)
+})
+
+test('application rate limits neither trigger wake-up nor retry ordinary requests', async t => {
+  const api = await apiModule(t)
+  const fetch = t.mock.method(globalThis, 'fetch', async url => url === workerModels
+    ? json(models)
+    : new Response(JSON.stringify({ detail: 'Rate limit reached.' }), {
+      status: 429, headers: { 'Retry-After': '5' },
+    }))
+  await api.startBackendReadiness()
+  await assert.rejects(api.getCurrentUser(), error => error.status === 429)
+  api.rememberSession({ id: 1, email: 'owner@example.com' })
+  await assert.rejects(api.getChats(), /Rate limit reached/)
+  await assert.rejects(api.generateImage('draft', models[0].model_id), /Rate limit reached/)
+  t.mock.timers.tick(120_000)
+  await flush()
+  assert.equal(api.getBackendState().status, 'ready')
+  assert.deepEqual(fetch.mock.calls.map(call => call.arguments[0]), [
+    workerModels, '/api/auth/Text-to-Masterpiece/users/me', '/api/Text-to-Masterpiece/chats?limit=50&offset=0',
+    '/api/Text-to-Masterpiece/generate',
+  ])
 })
 
 test('generation is never retried after an ambiguous network failure', async t => {

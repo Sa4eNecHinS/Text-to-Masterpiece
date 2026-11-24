@@ -24,6 +24,7 @@ async function module(path, imports = {}) {
 }
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status })
 const flush = () => new Promise(resolve => setImmediate(resolve))
+const renderModels = 'https://ttm-backend-du5g.onrender.com/Text-to-Masterpiece/models'
 
 async function setup(t, initiallyAvailable = false, options = {}) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 })
@@ -35,16 +36,6 @@ async function setup(t, initiallyAvailable = false, options = {}) {
   })
   t.mock.method(Math, 'random', () => 0.5)
   const oldStorage = globalThis.sessionStorage, oldAct = globalThis.IS_REACT_ACT_ENVIRONMENT
-  const oldDocument = globalThis.document
-  const wakeFrames = new Set()
-  let wakeCreations = 0
-  if (options.sleepingRender) globalThis.document = {
-    createElement() {
-      wakeCreations++
-      return { credentialless: false, setAttribute() {}, remove() { wakeFrames.delete(this) } }
-    },
-    body: { appendChild(frame) { wakeFrames.add(frame) } },
-  }
   const storage = new Map()
   if (options.selectedId) storage.set('ttm.current-chat.v3', JSON.stringify({
     owner: null, selectedId: options.selectedId, input: 'old saved draft', messages: [],
@@ -59,10 +50,12 @@ async function setup(t, initiallyAvailable = false, options = {}) {
   const calls = []
   const delayMs = options.delayMs ?? 0
   const selectedId = options.selectedId
-  const sleepingRender = options.sleepingRender
+  const coldStatus = options.coldStatus ?? 503
+  const currentUser = options.currentUser
   t.mock.method(globalThis, 'fetch', async (path, options) => {
     options?.signal?.throwIfAborted()
     calls.push([path, options])
+    if (path === renderModels) return { type: 'opaque', status: 0 }
     if (calls.length === 1 && delayMs) {
       await new Promise((resolve, reject) => {
         const abort = () => { clearTimeout(timer); reject(options.signal.reason) }
@@ -74,11 +67,9 @@ async function setup(t, initiallyAvailable = false, options = {}) {
       })
       available = true
     }
-    if (!available) return sleepingRender
-      ? new Response('Bad Gateway', { status: 502, headers: { 'x-render-routing': 'no-deploy' } })
-      : json({}, 503)
+    if (!available) return json({}, coldStatus)
     if (path.endsWith('/models')) return json([{ model_id: 'cloudflare/flux-1-schnell', name: 'FLUX.1-schnell' }])
-    if (path.endsWith('/users/me')) return json({}, 401)
+    if (path.endsWith('/users/me')) return currentUser ? json(currentUser) : json({}, 401)
     if (path.endsWith('/Text-to-Masterpiece')) return json({ ok: true })
     if (path.includes('/chats?')) return json(selectedId ? [{
       id: selectedId, title: 'Existing chat', created_at: '2020-01-01', updated_at: '2020-01-01',
@@ -125,8 +116,6 @@ async function setup(t, initiallyAvailable = false, options = {}) {
     }
     if (tree) await act(async () => tree.unmount())
     globalThis.sessionStorage = oldStorage
-    if (oldDocument === undefined) delete globalThis.document
-    else globalThis.document = oldDocument
     globalThis.IS_REACT_ACT_ENVIRONMENT = oldAct
   })
   await act(async () => {
@@ -138,12 +127,14 @@ async function setup(t, initiallyAvailable = false, options = {}) {
     )))
   })
   return {
-    tree, api, calls, wakeFrames, wakeCreations: () => wakeCreations,
+    tree, api, calls,
+    wakeCount: () => calls.filter(([path]) => path === renderModels).length,
     text: () => JSON.stringify(tree.toJSON()),
     input: () => tree.root.findByType('ChatInput').props,
     auth: () => tree.root.findByType('AuthProbe').props,
     layout: () => tree.root.findByType('AppLayout').props,
     available: () => { available = true },
+    unavailable: () => { available = false },
     create: async () => act(async () => tree.root.findByType('a').props.onClick({
       button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true },
     })),
@@ -151,11 +142,10 @@ async function setup(t, initiallyAvailable = false, options = {}) {
 }
 
 test('real Home Create navigation stays usable during cold start; StrictMode does not duplicate recovery or guests', async t => {
-  const app = await setup(t, false, { sleepingRender: true })
-  assert.equal(app.wakeCreations(), 1)
-  assert.equal(app.wakeFrames.size, 1)
+  const app = await setup(t, false, { coldStatus: 429 })
+  assert.equal(app.wakeCount(), 1)
   assert.doesNotMatch(app.text(), /Starting server|continue preparing your prompt/)
-  assert.equal(app.calls.length, 1)
+  assert.equal(app.calls.length, 2)
   await app.create()
   assert.match(app.text(), /Starting server/)
   assert.match(app.text(), /continue preparing your prompt/)
@@ -167,8 +157,7 @@ test('real Home Create navigation stays usable during cold start; StrictMode doe
   app.available()
   await act(async () => { t.mock.timers.tick(1000); await flush() })
   assert.equal(app.api.getBackendState().status, 'ready')
-  assert.equal(app.wakeFrames.size, 0)
-  assert.equal(app.wakeCreations(), 1)
+  assert.equal(app.wakeCount(), 1)
   assert.doesNotMatch(app.text(), /Starting server|The server is starting/)
   assert.equal(app.input().value, 'a draft before the server wakes')
   assert.equal(app.input().modelSelect.models.length, 1)
@@ -183,14 +172,29 @@ test('real Home Create navigation stays usable during cold start; StrictMode doe
   assert.equal(app.calls.length, count)
 })
 
-test('AuthProvider unmount removes the wake frame without recreating it on later probes', async t => {
-  const app = await setup(t, false, { sleepingRender: true })
-  assert.equal(app.wakeFrames.size, 1)
-  await act(async () => app.tree.unmount())
-  assert.equal(app.wakeFrames.size, 0)
+test('HTTP 429 during cold start does not show an auth error, create a guest or reset the signed-in session', async t => {
+  const currentUser = { id: 1, email: 'owner@example.com' }
+  const app = await setup(t, false, { coldStatus: 429, currentUser })
+  await app.create()
+  assert.match(app.text(), /Starting server/)
+  assert.equal(app.auth().sessionError, '')
+  assert.ok(app.calls.every(([path]) => path.endsWith('/models')))
+  app.available()
   await act(async () => { t.mock.timers.tick(1000); await flush() })
-  assert.equal(app.wakeCreations(), 1)
-  assert.equal(app.wakeFrames.size, 0)
+  assert.deepEqual(app.auth().user, currentUser)
+
+  app.unavailable()
+  let retry
+  await act(async () => { retry = app.api.retryBackendReadiness(); await flush() })
+  assert.equal(app.api.getBackendState().status, 'starting')
+  assert.deepEqual(app.auth().user, currentUser)
+  assert.equal(app.auth().sessionError, '')
+  app.available()
+  await act(async () => { t.mock.timers.tick(1000); await retry })
+  assert.deepEqual(app.auth().user, currentUser)
+  assert.equal(app.auth().sessionError, '')
+  assert.equal(app.calls.filter(([path]) => path.endsWith('/Text-to-Masterpiece')).length, 0)
+  assert.equal(app.wakeCount(), 2)
 })
 
 test('exhaustion exposes Try again; clicking it restores failed views without losing the draft or posting', async t => {
@@ -201,6 +205,8 @@ test('exhaustion exposes Try again; clicking it restores failed views without lo
     await act(async () => { t.mock.timers.tick(1000); await flush() })
   }
   assert.equal(app.api.getBackendState().status, 'unavailable')
+  assert.equal(app.auth().sessionError, '')
+  assert.equal(app.wakeCount(), 1)
   assert.match(app.text(), /Server temporarily unavailable/)
   assert.equal(app.input().value, 'keep my draft')
   assert.equal(app.input().loading, false)
