@@ -701,10 +701,9 @@ html, body, #root {
 }
 
 .input-transition-wrapper.bottom {
-  position: fixed;
-  bottom: 40px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: relative;
+  flex-shrink: 0;
+  margin: 0 auto 40px;
   width: 90%;
   max-width: 700px;
   z-index: 20;
@@ -747,8 +746,10 @@ html, body, #root {
   line-height: 1.4;
   margin-right: 8px;
   color: var(--text);
-  overflow: hidden;
-  height: 24px;
+  overflow-y: auto;
+  min-height: 24px;
+  max-height: min(10rem, 32vh);
+  max-height: min(10rem, 32dvh);
   padding: 0;
 }
 

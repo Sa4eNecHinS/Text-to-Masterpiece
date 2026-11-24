@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import ts from 'typescript'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { create } from 'react-test-renderer'
 
 let moduleId = 0
 // Use the project's TypeScript compiler and Node's test runner, without a new framework.
@@ -229,6 +230,60 @@ for (const state of [
     assert.match(html, state.message)
   })
 }
+
+test('prompt height is remeasured on text and width changes, including after clearing', async t => {
+  const { ChatInput } = await loadSource('components/chat/ChatInput.tsx')
+  let contentHeight = 24
+  let onResize, tree
+  const input = {
+    style: {}, offsetWidth: 320, scrollTop: 0,
+    get scrollHeight() {
+      assert.equal(this.style.height, 'auto')
+      return contentHeight
+    },
+  }
+  const observe = t.mock.fn()
+  const disconnect = t.mock.fn()
+  const originalError = console.error
+  t.mock.method(console, 'error', (...args) => {
+    if (!String(args[0]).startsWith('react-test-renderer is deprecated')) originalError(...args)
+  })
+  const globals = {
+    IS_REACT_ACT_ENVIRONMENT: true,
+    document: { fonts: { ready: Promise.resolve() } },
+    ResizeObserver: class {
+      constructor(callback) { onResize = callback }
+      observe = observe
+      disconnect = disconnect
+    },
+  }
+  const original = Object.fromEntries(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]))
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value })
+  t.after(async () => {
+    if (tree) await act(async () => tree.unmount())
+    for (const [key, previous] of Object.entries(original)) {
+      if (previous) Object.defineProperty(globalThis, key, previous)
+      else delete globalThis[key]
+    }
+  })
+  const element = value => createElement(ChatInput, { value, onChange() {}, onSend() {} })
+  await act(async () => { tree = create(element(''), { createNodeMock: node => node.type === 'textarea' ? input : null }) })
+  assert.equal(observe.mock.calls[0].arguments[0], input)
+  assert.equal(input.style.height, '24px')
+  contentHeight = 67
+  await act(async () => tree.update(element('first\nsecond\nthird')))
+  assert.equal(input.style.height, '67px')
+  contentHeight = 90
+  input.offsetWidth = 160
+  onResize()
+  assert.equal(input.style.height, '90px')
+  contentHeight = 24
+  await act(async () => tree.update(element('')))
+  assert.equal(input.style.height, '24px')
+  await act(async () => tree.unmount())
+  tree = undefined
+  assert.equal(disconnect.mock.callCount(), 1)
+})
 
 test('send button is disabled without a valid model even when prompt is nonempty', async () => {
   const { ChatInput } = await loadSource('components/chat/ChatInput.tsx')

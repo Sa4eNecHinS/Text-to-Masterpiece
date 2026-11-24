@@ -270,7 +270,7 @@ export default function GeneratePage() {
 
       {/* messages list */}
       {isChatMode && (
-        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '180px', paddingTop: '20px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', paddingBlock: '20px' }}>
            <MessageList messages={messages} loading={loading} />
         </div>
       )}

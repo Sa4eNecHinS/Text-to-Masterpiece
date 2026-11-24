@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { ModelSelect, type ModelSelectProps } from './ModelSelect';
 
@@ -11,6 +11,17 @@ interface ChatInputProps {
   placeholder?: string;
   isGlass?: boolean;
   modelSelect?: ModelSelectProps;
+}
+
+function resizePrompt(input: HTMLTextAreaElement) {
+  const scrollTop = input.scrollTop;
+  // Measure from one row at full width so the old height/scrollbar cannot
+  // prevent shrinking or affect how the text wraps.
+  input.style.overflowY = 'hidden';
+  input.style.height = 'auto';
+  input.style.height = `${input.scrollHeight}px`;
+  input.style.overflowY = '';
+  input.scrollTop = scrollTop;
 }
 
 export const ChatInput = ({
@@ -34,6 +45,28 @@ export const ChatInput = ({
     setMenuOpen(true);
   };
   const selectedModel = modelSelect?.models.find(model => model.model_id === modelSelect.value);
+
+  useLayoutEffect(() => {
+    if (textarea.current) resizePrompt(textarea.current);
+  }, [value]);
+
+  useEffect(() => {
+    const input = textarea.current;
+    if (!input) return;
+
+    let width = input.offsetWidth;
+    const observer = new ResizeObserver(() => {
+      if (input.offsetWidth === width) return;
+      width = input.offsetWidth;
+      resizePrompt(input);
+    });
+    observer.observe(input);
+
+    // The web font may change wrapping without changing the field's width.
+    let active = true;
+    void document.fonts.ready.then(() => { if (active) resizePrompt(input); });
+    return () => { active = false; observer.disconnect(); };
+  }, []);
 
   useEffect(() => {
     if (!showMenu && !showCommands) return;
